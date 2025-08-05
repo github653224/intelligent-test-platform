@@ -1,0 +1,5 @@
+{
+    "workbench.sideBar.location": "left",
+    "workbench.activityBar.location": "default",
+    "python.analysis.autoImportCompletions": true
+}

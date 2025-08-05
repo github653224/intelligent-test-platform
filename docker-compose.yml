@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:15
+    container_name: ai_test_postgres
+    environment:
+      POSTGRES_DB: ai_test_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai_test_network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: ai_test_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai_test_network
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai_test_backend
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=ai_test_platform
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+      - backend_logs:/app/logs
+    networks:
+      - ai_test_network
+
+  # AI引擎服务
+  ai_engine:
+    build:
+      context: ./ai_engine
+      dockerfile: Dockerfile
+    container_name: ai_test_ai_engine
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    ports:
+      - "8001:8001"
+    depends_on:
+      - ollama
+    volumes:
+      - ./ai_engine:/app
+      - ai_engine_logs:/app/logs
+    networks:
+      - ai_test_network
+
+  # Ollama本地模型服务
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai_test_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - ai_test_network
+
+  # 前端应用
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ai_test_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - ai_test_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_logs:
+  ai_engine_logs:
+  ollama_data:
+
+networks:
+  ai_test_network:
+    driver: bridge 

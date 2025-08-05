@@ -1,0 +1,40 @@
+# VS Code 相关
+.vscode/
+*.code-workspace
+
+# Python 相关
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+.pip_cache/
+.pytest_cache/
+*.ipynb_checkpoints/
+
+# Ollama 相关（本地 AI 模型）
+ollama/models/
+*.gguf
+*.bin
+*.safetensors
+
+# 通用开发文件
+node_modules/
+dist/
+build/
+*.log
+*.cache
+.DS_Store
+*.bak
+*.swp
+*.tmp
+
+# 其他临时文件
+*.bak
+*.swp
+*~
+*.lock

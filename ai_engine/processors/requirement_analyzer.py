@@ -1,9 +1,16 @@
 import json
 import logging
-from typing import Dict, Any, List, AsyncGenerator
+import os
+from datetime import datetime
+from typing import Dict, Any, List, AsyncGenerator, Optional
 from ai_engine.models.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
+
+# 创建保存分析结果的目录
+ANALYSIS_RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
+                                  'backend', 'app', 'static', 'analysis_results')
+os.makedirs(ANALYSIS_RESULTS_DIR, exist_ok=True)
 
 
 class RequirementAnalyzer:
@@ -63,9 +70,44 @@ class RequirementAnalyzer:
         prompt = self._build_analysis_prompt(requirement_text, project_context, test_focus)
         
         try:
+            accumulated_response = ""
+            logger.info("开始流式输出分析结果")
             # 流式输出分析结果
             async for chunk in self.ai_client.generate_response_stream(prompt, temperature=0.3):
+                accumulated_response += chunk
                 yield chunk
+                logger.debug(f"发送数据块: {chunk[:100]}...")  # 记录前100个字符
+            
+            # 尝试解析累积的响应为JSON
+            try:
+                logger.info("开始解析完整响应")
+                parsed_json = self._parse_analysis_response(accumulated_response)
+                logger.info("JSON解析成功，准备保存")
+                
+                # 保存分析结果到文件
+                filename = self._save_analysis_result(parsed_json)
+                if filename:
+                    file_info = {
+                        "status": "success",
+                        "filename": filename,
+                        "data": parsed_json
+                    }
+                else:
+                    file_info = {
+                        "status": "error",
+                        "message": "保存文件失败",
+                        "data": parsed_json
+                    }
+                
+                # 发送文件信息和JSON数据
+                yield "\n\n#JSON_START#\n"
+                json_str = json.dumps(file_info, ensure_ascii=False, indent=2)
+                logger.info(f"准备发送JSON数据: {json_str[:100]}...")  # 记录前100个字符
+                yield json_str
+                yield "\n#JSON_END#\n"
+                logger.info("JSON数据发送完成")
+            except Exception as parse_error:
+                logger.error(f"JSON解析失败: {parse_error}")
                 
         except Exception as e:
             logger.error(f"需求分析失败: {e}")
@@ -145,6 +187,30 @@ class RequirementAnalyzer:
         
         return prompt
     
+    def _save_analysis_result(self, data: Dict[str, Any]) -> Optional[str]:
+        """保存分析结果到文件
+        
+        Args:
+            data: 要保存的数据字典
+            
+        Returns:
+            保存的文件名或None（如果保存失败）
+        """
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"analysis_result_{timestamp}.json"
+            filepath = os.path.join(ANALYSIS_RESULTS_DIR, filename)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"分析结果已保存到文件: {filepath}")
+            return filename
+            
+        except Exception as e:
+            logger.error(f"保存分析结果失败: {e}")
+            return None
+
     def _parse_analysis_response(self, response: str) -> Dict[str, Any]:
         """解析AI分析响应"""
         try:

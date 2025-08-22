@@ -1,0 +1,96 @@
+{
+  "functional_points": [
+    {
+      "point": "用户注册（username, email, password）",
+      "priority": "high",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "账号激活链接发送与验证",
+      "priority": "medium",
+      "complexity": "low",
+      "risk_level": "low"
+    },
+    {
+      "point": "重复注册检测与处理",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "medium"
+    }
+  ],
+  "test_boundaries": [
+    {
+      "boundary": "空值检查（username, email, password）",
+      "test_type": "negative",
+      "priority": "high"
+    },
+    {
+      "boundary": "特殊字符输入（username, email）",
+      "test_type": "edge",
+      "priority": "medium"
+    },
+    {
+      "boundary": "短/长密码检查",
+      "test_type": "edge",
+      "priority": "low"
+    }
+  ],
+  "risk_points": [
+    {
+      "risk": "个人数据泄露",
+      "impact": "high",
+      "mitigation": "加密存储、安全授权机制"
+    },
+    {
+      "risk": "账号铤出重复注册",
+      "impact": "medium",
+      "mitigation": "IP限制与记住IP地址、CAPTCHA验证"
+    },
+    {
+      "risk": "激活链接滥用",
+      "impact": "low",
+      "mitigation": "限制每个账号一天只能发出一定数量的链接、短期有效"
+    }
+  ],
+  "test_strategy": {
+    "overall_approach": "测试覆盖全 Register 功能流程，包括正常场景、边缘场景和负面场景",
+    "test_levels": [
+      "unit",
+      "integration",
+      "system",
+      "acceptance"
+    ],
+    "automation_scope": "自动化可用于测试单元与集成测试，减少重复工作量",
+    "tools_recommendation": [
+      "Selenium WebDriver for UI testing",
+      "JUnit for unit testing"
+    ]
+  },
+  "test_priorities": [
+    {
+      "area": "UI 交互流程",
+      "priority": "high",
+      "rationale": "用户首次使用的接触点，必须正确并友好"
+    },
+    {
+      "area": "数据库存储安全性",
+      "priority": "medium",
+      "rationale": "保护个人敏感信息是一项重要的任务"
+    },
+    {
+      "area": "注册/激活链接管理",
+      "priority": "low",
+      "rationale": "尽可能降低风险，但优先级较低"
+    }
+  ],
+  "estimated_effort": {
+    "total_hours": "160 hours",
+    "breakdown": {
+      "test_planning": "20 hours",
+      "test_design": "40 hours",
+      "test_execution": "80 hours",
+      "automation": "20 hours"
+    }
+  }
+}

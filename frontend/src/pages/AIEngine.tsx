@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   Tabs,
@@ -11,27 +11,176 @@ import {
   Spin,
   Typography,
   Divider,
+  Progress,
+  Tooltip,
 } from 'antd';
-import { RobotOutlined, FileTextOutlined, BugOutlined, ApiOutlined } from '@ant-design/icons';
+import {
+  DownloadOutlined,
+  CodeOutlined,
+  FilePdfOutlined,
+  FileExcelOutlined,
+  ApartmentOutlined,
+  RobotOutlined,
+  FileTextOutlined,
+  BugOutlined,
+  ApiOutlined,
+} from '@ant-design/icons';
 import { analyzeRequirementStream, generateTestCases, generateAPITests, generateUITests } from '../services/aiService';
 
 const { Title, Paragraph } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
+interface AnalysisJsonData {
+  status: string;
+  filename?: string;
+  data?: any;
+  message?: string;
+}
+
 const AIEngine: React.FC = () => {
-  const [loading, setLoading] = useState(false);
+  // 添加loading状态声明
+  const [loading, setLoading] = useState<boolean>(false);
   const [results, setResults] = useState<any>(null);
   const [streamAnalysis, setStreamAnalysis] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [progressVisible, setProgressVisible] = useState(false);
+  const [analysisJson, setAnalysisJson] = useState<AnalysisJsonData | null>(null);
+
+  // 下载分析结果为JSON文件
+  const handleDownload = (type: 'json' | 'pdf' | 'excel' | 'mindmap') => {
+    if (!analysisJson) {
+      message.warning('请先进行需求分析');
+      return;
+    }
+
+    switch (type) {
+      case 'json':
+        if (analysisJson.status === 'success' && analysisJson.filename) {
+          // 从静态文件目录下载保存的文件
+          const downloadUrl = `http://localhost:8000/static/analysis_results/${analysisJson.filename}`;
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = analysisJson.filename || `需求分析结果_${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          message.success('文件下载开始');
+        } else if (analysisJson.data) {
+          // Fallback to downloading the current analysis data as JSON
+          const dataStr = JSON.stringify(analysisJson.data, null, 2);
+          const blob = new Blob([dataStr], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `需求分析结果_${new Date().toISOString().split('T')[0]}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          message.success('文件下载开始');
+        } else {
+          message.error('没有可下载的数据');
+        }
+        break;
+      case 'pdf':
+        // TODO: 实现PDF导出
+        message.info('PDF导出功能开发中...');
+        break;
+      case 'excel':
+        // TODO: 实现Excel导出
+        message.info('Excel导出功能开发中...');
+        break;
+      case 'mindmap':
+        // TODO: 实现思维导图导出
+        message.info('思维导图导出功能开发中...');
+        break;
+      default:
+        return;
+    }
+  };
+
+  // 进度条动画
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (loading && progressVisible) {
+      timer = setInterval(() => {
+        setProgress((prevProgress) => {
+          // 确保进度在0-95之间，保留最后5%给完成时使用
+          const nextProgress = prevProgress + Math.random() * 3;
+          return nextProgress < 95 ? nextProgress : 95;
+        });
+      }, 200);
+    } else if (!loading && progress > 0) {
+      // 当加载完成时，直接设置为100%
+      setProgress(100);
+      timer = setTimeout(() => {
+        setProgress(0);
+        setProgressVisible(false);
+      }, 500);
+    }
+
+    return () => {
+      if (timer) {
+        clearInterval(timer);
+      }
+    };
+  }, [loading, progressVisible]);
 
   const handleRequirementAnalysis = async (values: any) => {
+    console.log('Starting requirement analysis...');  // 添加调试日志
     setLoading(true);
     setStreamAnalysis('');
+    setProgressVisible(true);
+    setProgress(0);
+    setAnalysisJson(null);  // 重置JSON状态
+    let accumulatedChunks = '';
+    let isCollectingJson = false;
+    let jsonContent = '';
+    
+    console.log('Starting analysis...');
     try {
       await analyzeRequirementStream(
         values,
         (chunk) => {
-          setStreamAnalysis(prev => prev + chunk);
+          console.log('Received chunk:', chunk);  // 调试：显示接收到的每个数据块
+          
+          // 检查是否包含JSON标记
+          if (chunk.includes('#JSON_START#')) {
+            console.log('Found JSON_START marker');  // 调试：JSON开始标记
+            isCollectingJson = true;
+            jsonContent = '';  // 重置JSON内容
+            return;
+          }
+          
+          if (chunk.includes('#JSON_END#')) {
+            console.log('Found JSON_END marker');  // 调试：JSON结束标记
+            console.log('Collected JSON content:', jsonContent);  // 调试：显示收集到的JSON内容
+            isCollectingJson = false;
+            try {
+              // 解析和设置JSON数据
+              const jsonData = JSON.parse(jsonContent.trim());
+              console.log('Successfully parsed JSON:', jsonData);  // 调试：显示解析后的JSON
+              
+              // 设置分析结果
+              setAnalysisJson(jsonData);
+              message.success('分析完成，可以下载结果');
+              console.log('Analysis JSON set:', jsonData); // 添加调试日志
+            } catch (e) {
+              console.error('JSON parse error:', e);  // 调试：显示解析错误
+              console.error('Failed JSON content:', jsonContent);  // 调试：显示导致失败的内容
+              message.error('JSON解析失败');
+            }
+            return;
+          }
+          
+          // 收集JSON内容或更新分析结果显示
+          if (isCollectingJson) {
+            console.log('Collecting JSON chunk:', chunk);  // 调试：显示正在收集的JSON片段
+            jsonContent += chunk;
+          } else {
+            setStreamAnalysis(prev => prev + chunk);
+          }
         }
       );
     } catch (error) {
@@ -43,6 +192,8 @@ const AIEngine: React.FC = () => {
 
   const handleTestCaseGeneration = async (values: any) => {
     setLoading(true);
+    setProgressVisible(true);
+    setProgress(0);
     try {
       const response = await generateTestCases(values);
       setResults({ type: 'test_case_generation', data: response });
@@ -56,6 +207,8 @@ const AIEngine: React.FC = () => {
 
   const handleAPITestGeneration = async (values: any) => {
     setLoading(true);
+    setProgressVisible(true);
+    setProgress(0);
     try {
       const response = await generateAPITests(values);
       setResults({ type: 'api_test_generation', data: response });
@@ -69,6 +222,8 @@ const AIEngine: React.FC = () => {
 
   const handleUITestGeneration = async (values: any) => {
     setLoading(true);
+    setProgressVisible(true);
+    setProgress(0);
     try {
       const response = await generateUITests(values);
       setResults({ type: 'ui_test_generation', data: response });
@@ -128,29 +283,72 @@ const AIEngine: React.FC = () => {
               />
             </Form.Item>
             <Form.Item>
-              <Button type="primary" htmlType="submit" loading={loading} icon={<RobotOutlined />}>
-                开始分析
-              </Button>
+              <Space size="middle">
+                <Button type="primary" htmlType="submit" loading={loading} icon={<RobotOutlined />}>
+                  开始分析
+                </Button>
+                <Tooltip title={analysisJson ? "下载JSON格式" : "请先进行需求分析"}>
+                  <Button 
+                    type={analysisJson ? "primary" : "default"}
+                    icon={<CodeOutlined />}
+                    onClick={() => handleDownload('json')}
+                    disabled={loading || !analysisJson}
+                  >
+                    JSON {analysisJson?.filename ? '(已生成)' : ''}
+                  </Button>
+                </Tooltip>
+                <Tooltip title={analysisJson ? "下载PDF格式" : "请先进行需求分析"}>
+                  <Button
+                    icon={<FilePdfOutlined />}
+                    onClick={() => handleDownload('pdf')}
+                    disabled={loading || !analysisJson}
+                  >
+                    PDF
+                  </Button>
+                </Tooltip>
+                <Tooltip title={analysisJson ? "下载Excel格式" : "请先进行需求分析"}>
+                  <Button
+                    icon={<FileExcelOutlined />}
+                    onClick={() => handleDownload('excel')}
+                    disabled={loading || !analysisJson}
+                  >
+                    Excel
+                  </Button>
+                </Tooltip>
+                <Tooltip title={analysisJson ? "下载思维导图" : "请先进行需求分析"}>
+                  <Button
+                    icon={<ApartmentOutlined />}
+                    onClick={() => handleDownload('mindmap')}
+                    disabled={loading || !analysisJson}
+                  >
+                    思维导图
+                  </Button>
+                </Tooltip>
+              </Space>
             </Form.Item>
           </Form>
-          <div
-            style={{
-              marginTop: 16,
-              padding: 16,
-              border: '1px solid #d9d9d9',
-              borderRadius: 4,
-              backgroundColor: '#f5f5f5',
-              minHeight: 300,
-              maxHeight: 600,
-              overflowY: 'auto',
-              fontFamily: 'Monaco, Consolas, monospace',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              fontSize: '14px',
-              lineHeight: '1.6',
-            }}
-          >
-            {streamAnalysis || '等待 AI 分析结果...'}
+          <div style={{ position: 'relative', marginBottom: 16 }}>
+            <div
+              style={{
+                marginTop: 16,
+                padding: 16,
+                border: '1px solid #d9d9d9',
+                borderRadius: 4,
+                backgroundColor: '#f5f5f5',
+                minHeight: 300,
+                maxHeight: 600,
+                overflowY: 'auto',
+                fontFamily: 'Monaco, Consolas, monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: '14px',
+                lineHeight: '1.6',
+                position: 'relative'
+              }}
+            >
+              {streamAnalysis || '等待 AI 分析结果...'}
+            </div>
+
           </div>
         </Card>
       ),
@@ -301,6 +499,7 @@ const AIEngine: React.FC = () => {
 
   return (
     <div>
+      {/* 修复JSX结构，确保所有标签正确闭合 */}
       <Title level={2}>
         <RobotOutlined /> AI智能测试引擎
       </Title>
@@ -308,10 +507,22 @@ const AIEngine: React.FC = () => {
         基于AI技术，自动分析需求、生成测试用例、创建API测试和UI自动化测试脚本
       </Paragraph>
       <Divider />
-      <Spin spinning={loading}>
+      <div>
+        {progressVisible && (
+          <div style={{ marginBottom: 16 }}>
+            <Progress 
+              percent={Math.round(progress)} 
+              status={progress >= 100 ? "success" : "active"} 
+              strokeColor={{
+                '0%': '#108ee9',
+                '100%': '#87d068',
+              }}
+            />
+          </div>
+        )}
         <Tabs items={items} />
         {renderResults()}
-      </Spin>
+      </div>
     </div>
   );
 };

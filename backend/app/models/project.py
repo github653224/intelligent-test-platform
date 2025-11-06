@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, JSON, ForeignKey, Integer, Enum
+from sqlalchemy import Column, String, Text, JSON, ForeignKey, Integer, Enum, TypeDecorator
 from sqlalchemy.orm import relationship
 import enum
 
@@ -11,12 +11,40 @@ class ProjectStatus(str, enum.Enum):
     ARCHIVED = "archived"
 
 
+class ProjectStatusEnum(TypeDecorator):
+    """自定义类型装饰器，确保枚举值以正确的字符串形式存储到数据库"""
+    impl = Enum('active', 'inactive', 'archived', name='projectstatus', native_enum=True)
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        """在写入数据库前处理值"""
+        if value is None:
+            return None
+        # 如果是枚举对象，返回其值（小写字符串）
+        if isinstance(value, ProjectStatus):
+            return value.value
+        # 如果是字符串，确保是小写
+        if isinstance(value, str):
+            return value.lower()
+        # 其他情况转换为小写字符串
+        return str(value).lower()
+    
+    def process_result_value(self, value, dialect):
+        """从数据库读取后处理值"""
+        if value is None:
+            return None
+        try:
+            return ProjectStatus(value.lower())
+        except ValueError:
+            return ProjectStatus.ACTIVE
+
+
 class Project(Base):
     __tablename__ = "projects"
     
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text)
-    status = Column(Enum(ProjectStatus), default=ProjectStatus.ACTIVE)
+    status = Column(ProjectStatusEnum(), default='active')
     config = Column(JSON, default={})
     
     # 关联关系

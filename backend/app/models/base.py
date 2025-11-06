@@ -6,8 +6,7 @@ from sqlalchemy.ext.declarative import as_declarative, declared_attr
 
 @as_declarative()
 class Base:
-    id: Any
-    __name__: str
+    __allow_unmapped__ = True  # 兼容 SQLAlchemy 2.x 对注解的严格校验
     
     # 生成表名
     @declared_attr

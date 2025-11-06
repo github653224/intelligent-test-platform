@@ -15,8 +15,9 @@ class AIClient:
         self.openai_client = None
         self.deepseek_client = None
         self.ollama_base_url = "http://localhost:11434"
-        self.default_ollama_model = "mistral"  # 使用已经确认安装的模型名
+        self.default_ollama_model = "llama3.2:latest"
         self.current_model = "ollama"
+        self.current_model_name = "llama3.2:latest"  # 当前使用的具体模型名称
         # self.default_ollama_model = "deepseek-chat"  # 使用已经确认安装的模型名
         # self.current_model = "deepseek"
         self.ollama_api_version = "v1"  # 添加API版本控制
@@ -31,6 +32,9 @@ class AIClient:
                     base_url="https://api.deepseek.com"
                 )
                 logger.info("Deepseek客户端初始化成功")
+                # 若可用，优先使用 deepseek 以获取更稳定的响应
+                self.current_model = "deepseek"
+                self.current_model_name = "deepseek-chat"
 
             # 测试Ollama是否可用
             async def test_ollama():
@@ -98,9 +102,16 @@ class AIClient:
                     prompt, model or "deepseek-chat", max_tokens, temperature
                 )
             else:
-                return await self._generate_ollama_response(
-                    prompt, model or "llama3.2:latest", max_tokens, temperature
+                result = await self._generate_ollama_response(
+                    prompt, model or self.default_ollama_model, max_tokens, temperature
                 )
+                # 若Ollama返回空字符串，尝试备选模型
+                if not result and self.deepseek_client:
+                    logger.warning("Ollama返回空响应，回退到Deepseek")
+                    return await self._generate_deepseek_response(
+                        prompt, "deepseek-chat", max_tokens, temperature
+                    )
+                return result
         except Exception as e:
             logger.error(f"AI响应生成失败: {e}")
             raise
@@ -140,7 +151,7 @@ class AIClient:
             response = await self.deepseek_client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请以JSON格式返回分析结果。"},
+                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请严格按照用户要求的JSON格式返回结果，不要添加任何解释性文字，只返回可解析的JSON对象。"},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=max_tokens,
@@ -190,6 +201,7 @@ class AIClient:
     ) -> AsyncGenerator[str, None]:
         """使用Ollama生成流式响应"""
         model = model or self.default_ollama_model
+        self.current_model_name = model  # 更新当前使用的模型名称
         logger.info(f"开始调用Ollama流式生成，模型: {model}, URL: {self.ollama_base_url}")
         
         try:
@@ -200,7 +212,7 @@ class AIClient:
                     json={
                         "model": model,
                         "messages": [
-                            {"role": "system", "content": "你是一个专业的软件测试专家，请以JSON格式回复。"},
+                            {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请严格按照用户要求的JSON格式返回结果，不要添加任何解释性文字，只返回可解析的JSON对象。"},
                             {"role": "user", "content": prompt}
                         ],
                         "stream": True
@@ -254,6 +266,7 @@ class AIClient:
                     logger.error(f"Ollama响应失败，尝试切换到Deepseek: {e}")
                     if self.deepseek_client:
                         self.current_model = "deepseek"
+                        self.current_model_name = "deepseek-chat"
                         async for chunk in self._generate_deepseek_response_stream(
                             prompt, "deepseek-chat", max_tokens, temperature
                         ):
@@ -292,13 +305,14 @@ class AIClient:
         """使用Deepseek生成流式响应"""
         if not self.deepseek_client:
             raise Exception("Deepseek客户端未初始化")
-            
+        
+        self.current_model_name = model  # 更新当前使用的模型名称
         logger.info(f"开始调用Deepseek流式生成，模型: {model}")
         try:
             response = await self.deepseek_client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请以JSON格式返回分析结果。"},
+                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请严格按照用户要求的JSON格式返回结果，不要添加任何解释性文字，只返回可解析的JSON对象。"},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=max_tokens,

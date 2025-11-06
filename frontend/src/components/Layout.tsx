@@ -17,7 +17,7 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const {
@@ -62,8 +62,22 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
-      <Sider trigger={null} collapsible collapsed={collapsed}>
+    <AntLayout style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}>
+      <Sider 
+        trigger={null} 
+        collapsible 
+        collapsed={collapsed}
+        width={200}
+        style={{
+          position: 'fixed',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          height: '100vh',
+          overflow: 'auto',
+          zIndex: 100,
+        }}
+      >
         <div style={{ 
           height: 32, 
           margin: 16, 
@@ -84,10 +98,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           selectedKeys={[location.pathname]}
           items={menuItems}
           onClick={handleMenuClick}
+          style={{ height: 'calc(100vh - 64px)', overflow: 'auto' }}
         />
       </Sider>
-      <AntLayout>
-        <Header style={{ padding: 0, background: colorBgContainer }}>
+      <AntLayout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.2s' }}>
+        <Header 
+          style={{ 
+            padding: 0, 
+            background: colorBgContainer,
+            position: 'sticky',
+            top: 0,
+            zIndex: 1,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+          }}
+        >
           <div style={{ 
             padding: '0 24px',
             fontSize: 18,
@@ -104,6 +128,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             minHeight: 280,
             background: colorBgContainer,
             borderRadius: borderRadiusLG,
+            overflow: 'auto',
+            height: 'calc(100vh - 112px)',
           }}
         >
           {children}

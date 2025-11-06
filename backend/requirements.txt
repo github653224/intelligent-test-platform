@@ -11,8 +11,16 @@ python-multipart==0.0.6
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 httpx==0.25.2
+aiohttp==3.9.1
 openai>=1.0.0
 requests==2.31.0
+python-docx==1.1.0
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+openpyxl==3.1.2
+xlrd==2.0.1
+xmindparser==1.0.10
+python-magic==0.4.27
 selenium==4.15.2
 playwright==1.40.0
 pytest==7.4.3
@@ -22,3 +30,4 @@ black==23.11.0
 isort==5.12.0
 flake8==6.1.0
 mypy==1.7.1
+apscheduler==3.10.4

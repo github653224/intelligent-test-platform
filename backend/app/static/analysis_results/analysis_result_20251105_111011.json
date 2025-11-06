@@ -1,0 +1,210 @@
+{
+  "functional_points": [
+    {
+      "point": "小组导师搭档管理-可带班类型配置",
+      "priority": "high",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "系统课班级管理-小组导师查询与筛选",
+      "priority": "high",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "班级创建与编辑-关联小组导师",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "导师变更记录管理",
+      "priority": "medium",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "批量修改导师功能",
+      "priority": "medium",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "学员批量查询与导出",
+      "priority": "medium",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "会员督导营期管理",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "会员导师搭档管理",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "督导学员状态管理",
+      "priority": "high",
+      "complexity": "medium",
+      "risk_level": "medium"
+    },
+    {
+      "point": "学员约课选导师流程",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "历史数据初始化-订单系统",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "历史数据初始化-财务系统",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "历史数据初始化-教务系统",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    },
+    {
+      "point": "多系统交互-退费流程",
+      "priority": "high",
+      "complexity": "high",
+      "risk_level": "high"
+    }
+  ],
+  "test_boundaries": [
+    {
+      "boundary": "导师搭档可带班级类型为空值",
+      "test_type": "negative",
+      "priority": "high"
+    },
+    {
+      "boundary": "批量修改导师时选中班级数量为0",
+      "test_type": "negative",
+      "priority": "medium"
+    },
+    {
+      "boundary": "导出学员数量超过10000上限",
+      "test_type": "edge",
+      "priority": "high"
+    },
+    {
+      "boundary": "同一导师搭档营期时间重叠校验",
+      "test_type": "edge",
+      "priority": "high"
+    },
+    {
+      "boundary": "学员选导师时剩余名额为0",
+      "test_type": "edge",
+      "priority": "high"
+    },
+    {
+      "boundary": "历史数据导入时主键冲突",
+      "test_type": "negative",
+      "priority": "high"
+    },
+    {
+      "boundary": "分期付款学员补款金额边界",
+      "test_type": "edge",
+      "priority": "medium"
+    },
+    {
+      "boundary": "学员入班类型混班限制",
+      "test_type": "edge",
+      "priority": "high"
+    }
+  ],
+  "risk_points": [
+    {
+      "risk": "多系统数据一致性风险",
+      "impact": "high",
+      "mitigation": "建立数据同步监控机制，实施端到端集成测试"
+    },
+    {
+      "risk": "历史数据迁移完整性风险",
+      "impact": "high",
+      "mitigation": "制定详细的数据验证方案，分批次迁移并验证"
+    },
+    {
+      "risk": "新旧系统并行期业务流程冲突",
+      "impact": "high",
+      "mitigation": "制定清晰的过渡期方案，加强业务培训"
+    },
+    {
+      "risk": "导师分班逻辑复杂性导致的业务规则错误",
+      "impact": "high",
+      "mitigation": "详细梳理业务规则，进行充分的场景测试"
+    },
+    {
+      "risk": "批量操作性能问题",
+      "impact": "medium",
+      "mitigation": "进行性能测试，设置合理的批量操作限制"
+    }
+  ],
+  "test_strategy": {
+    "overall_approach": "采用分层测试策略，优先保障核心业务流程，重点验证多系统集成和数据迁移的准确性",
+    "test_levels": [
+      "unit",
+      "integration",
+      "system",
+      "acceptance"
+    ],
+    "automation_scope": "核心业务流程自动化，包括学员选导师、班级管理、数据导入等高频操作",
+    "tools_recommendation": [
+      "Selenium",
+      "Postman",
+      "Jmeter",
+      "TestNG",
+      "Allure"
+    ]
+  },
+  "test_priorities": [
+    {
+      "area": "学员选导师与分班流程",
+      "priority": "high",
+      "rationale": "直接影响用户体验和核心业务收入"
+    },
+    {
+      "area": "历史数据迁移与初始化",
+      "priority": "high",
+      "rationale": "涉及大量历史数据，迁移失败将影响业务连续性"
+    },
+    {
+      "area": "多系统集成与数据同步",
+      "priority": "high",
+      "rationale": "系统间数据不一致将导致业务流程中断"
+    },
+    {
+      "area": "导师管理与分班逻辑",
+      "priority": "high",
+      "rationale": "业务规则复杂，直接影响教学质量"
+    },
+    {
+      "area": "批量操作与导出功能",
+      "priority": "medium",
+      "rationale": "涉及大量数据处理，需要保障性能和稳定性"
+    }
+  ],
+  "estimated_effort": {
+    "total_hours": 480,
+    "breakdown": {
+      "test_planning": 40,
+      "test_design": 120,
+      "test_execution": 240,
+      "automation": 80
+    }
+  }
+}

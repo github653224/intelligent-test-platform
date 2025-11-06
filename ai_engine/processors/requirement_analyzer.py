@@ -40,11 +40,21 @@ class RequirementAnalyzer:
             # 解析分析结果
             analysis_result = self._parse_analysis_response(response)
             
+            # 保存分析结果到文件，便于非流式接口直接提供下载
+            filename: Optional[str] = None
+            try:
+                filename = self._save_analysis_result(analysis_result)
+            except Exception as save_error:
+                logger.error(f"保存分析结果失败: {save_error}")
+                filename = None
+
             return {
                 "status": "success",
                 "requirement_text": requirement_text,
                 "analysis": analysis_result,
-                "test_focus": test_focus
+                "test_focus": test_focus,
+                # 若保存成功则返回文件名，前端可通过 /static/analysis_results/{filename} 下载
+                "filename": filename
             }
             
         except Exception as e:
@@ -86,17 +96,23 @@ class RequirementAnalyzer:
                 
                 # 保存分析结果到文件
                 filename = self._save_analysis_result(parsed_json)
+                ai_model_info = {
+                    "provider": self.ai_client.current_model,
+                    "model_name": getattr(self.ai_client, 'current_model_name', self.ai_client.default_ollama_model if self.ai_client.current_model == "ollama" else "deepseek-chat")
+                }
                 if filename:
                     file_info = {
                         "status": "success",
                         "filename": filename,
-                        "data": parsed_json
+                        "data": parsed_json,
+                        "ai_model": ai_model_info
                     }
                 else:
                     file_info = {
                         "status": "error",
                         "message": "保存文件失败",
-                        "data": parsed_json
+                        "data": parsed_json,
+                        "ai_model": ai_model_info
                     }
                 
                 # 发送文件信息和JSON数据

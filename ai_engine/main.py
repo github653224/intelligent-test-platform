@@ -1,10 +1,10 @@
 import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from ai_engine.models.ai_client import AIClient
 from ai_engine.processors.requirement_analyzer import RequirementAnalyzer
 from ai_engine.processors.test_case_generator import TestCaseGenerator
@@ -43,10 +43,22 @@ class RequirementRequest(BaseModel):
 
 
 class TestCaseRequest(BaseModel):
-    requirement_id: int
+    requirement_id: int | None = None
     requirement_text: str
     test_type: str  # functional, api, ui
-    test_scope: Dict[str, Any] = {}
+    test_scope: Union[str, Dict[str, Any]] = {}
+    generate_script: bool = True  # 是否同时生成自动化测试脚本
+    
+    @field_validator('test_scope', mode='before')
+    @classmethod
+    def normalize_test_scope(cls, v):
+        """将字符串转换为字典格式"""
+        if isinstance(v, str):
+            # 如果 test_scope 是字符串，将其包装为字典
+            if v.strip():
+                return {"description": v}
+            return {}
+        return v or {}
 
 
 class APITestRequest(BaseModel):
@@ -90,7 +102,8 @@ async def generate_test_cases(request: TestCaseRequest):
         test_cases = await test_case_generator.generate(
             request.requirement_text,
             request.test_type,
-            request.test_scope
+            request.test_scope,
+            request.generate_script
         )
         return {
             "status": "success",
@@ -147,6 +160,26 @@ async def analyze_requirement_stream(request: RequirementRequest):
             test_focus=request.test_focus
         ):
             # 确保每个chunk都是SSE格式
+            yield f"data: {chunk}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+@app.post("/api/generate-test-cases-stream")
+async def generate_test_cases_stream(request: TestCaseRequest):
+    """流式生成测试用例"""
+    async def generate():
+        async for chunk in test_case_generator.generate_stream(
+            requirement_text=request.requirement_text,
+            test_type=request.test_type,
+            test_scope=request.test_scope,
+            generate_script=request.generate_script
+        ):
             yield f"data: {chunk}\n\n"
 
     return StreamingResponse(

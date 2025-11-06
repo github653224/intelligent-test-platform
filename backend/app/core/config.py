@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # 数据库配置
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = ""
+    POSTGRES_PASSWORD: str = "password"  # 默认密码，可通过环境变量覆盖
     POSTGRES_DB: str = "ai_test_platform"
     SQLALCHEMY_DATABASE_URI: Optional[str] = None
 
@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     def assemble_db_connection(cls, v: Optional[str], values: dict) -> str:
         if isinstance(v, str):
             return v
-        return f"postgresql://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}@{values.get('POSTGRES_SERVER')}/{values.get('POSTGRES_DB')}"
+        password = values.get('POSTGRES_PASSWORD') or 'password'
+        return f"postgresql://{values.get('POSTGRES_USER')}:{password}@{values.get('POSTGRES_SERVER')}/{values.get('POSTGRES_DB')}"
 
     # Redis配置
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = True
-        env_file = ".env"
+        env_file = [".env", "../.env"]  # 尝试从当前目录和父目录读取 .env 文件
 
 
 settings = Settings()

@@ -408,62 +408,112 @@ if __name__ == "__main__":
     def _parse_ui_tests_response(self, response: str) -> List[Dict[str, Any]]:
         """解析UI测试响应"""
         try:
-            # 尝试解析JSON
-            if response.strip().startswith('{'):
-                parsed = json.loads(response)
+            if not response or not response.strip():
+                logger.warning("AI响应为空")
+                return []
+            
+            # 清理响应文本，移除可能的markdown代码块标记
+            cleaned_response = response.strip()
+            
+            # 如果包含markdown代码块标记，提取JSON部分
+            if "```json" in cleaned_response:
+                import re
+                match = re.search(r'```json\s*\n(.*?)\n```', cleaned_response, re.DOTALL)
+                if match:
+                    cleaned_response = match.group(1).strip()
+                    logger.info("从markdown代码块中提取JSON")
+            elif "```" in cleaned_response:
+                import re
+                match = re.search(r'```\s*\n(.*?)\n```', cleaned_response, re.DOTALL)
+                if match:
+                    cleaned_response = match.group(1).strip()
+                    logger.info("从代码块中提取JSON")
+            
+            # 尝试直接解析JSON
+            try:
+                parsed = json.loads(cleaned_response)
                 ui_tests = parsed.get('ui_tests', [])
                 
-                # 为每个测试添加元数据
-                for test in ui_tests:
-                    test['generated_by'] = 'ai'
-                    test['test_type'] = 'ui'
-                    test['status'] = 'draft'
-                
-                return ui_tests
-            else:
-                # 如果不是标准JSON，尝试提取JSON部分
-                import re
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
-                if json_match:
-                    parsed = json.loads(json_match.group())
-                    ui_tests = parsed.get('ui_tests', [])
-                    
+                if ui_tests:
+                    # 为每个测试添加元数据
                     for test in ui_tests:
                         test['generated_by'] = 'ai'
                         test['test_type'] = 'ui'
-                        test['status'] = 'draft'
-                    
+                        if 'status' not in test:
+                            test['status'] = 'draft'
+                    logger.info(f"成功解析出 {len(ui_tests)} 个UI测试")
                     return ui_tests
-                else:
-                    # 返回原始响应作为单个测试
-                    return [{
-                        "name": "AI生成的UI测试",
-                        "description": response,
-                        "test_type": "ui",
-                        "generated_by": "ai",
-                        "status": "draft",
-                        "raw_response": response
-                    }]
+            except json.JSONDecodeError:
+                # 尝试提取JSON对象
+                import re
+                # 更精确的JSON提取，匹配完整的JSON对象
+                json_match = re.search(r'\{[\s\S]*"ui_tests"[\s\S]*\}', cleaned_response)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group())
+                        ui_tests = parsed.get('ui_tests', [])
+                        if ui_tests:
+                            for test in ui_tests:
+                                test['generated_by'] = 'ai'
+                                test['test_type'] = 'ui'
+                                if 'status' not in test:
+                                    test['status'] = 'draft'
+                            logger.info(f"通过正则提取成功解析出 {len(ui_tests)} 个UI测试")
+                            return ui_tests
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"正则提取的JSON解析失败: {e}")
+            
+            # 如果JSON解析失败，尝试从原始响应中提取python_code
+            # 即使JSON不完整，也可能包含有用的代码片段
+            python_code_extracted = None
+            try:
+                import re
+                # 方法1: 尝试从python_code对象中提取（处理转义字符）
+                # 查找 "python_code": {"selenium": "..." 或 "python_code": {"playwright": "..."
+                python_code_patterns = [
+                    r'"python_code"\s*:\s*\{[^}]*"(?:selenium|playwright)"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                    r'"python_code"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                ]
+                for pattern in python_code_patterns:
+                    match = re.search(pattern, cleaned_response, re.DOTALL)
+                    if match:
+                        python_code_extracted = match.group(1)
+                        # 处理转义字符
+                        python_code_extracted = python_code_extracted.replace('\\n', '\n').replace('\\"', '"').replace('\\t', '\t').replace('\\\\', '\\')
+                        if python_code_extracted.strip():
+                            break
+                
+                # 方法2: 如果没找到，尝试从原始响应中查找Python代码块
+                if not python_code_extracted:
+                    python_code_block = re.search(r'```(?:python)?\s*\n(.*?)\n```', response, re.DOTALL)
+                    if python_code_block:
+                        python_code_extracted = python_code_block.group(1).strip()
+            except Exception as e:
+                logger.warning(f"提取python_code失败: {e}")
+            
+            # 如果无法解析，记录原始响应用于调试
+            result = {
+                "name": "AI生成的UI测试",
+                "description": "无法解析JSON格式，返回原始响应",
+                "test_type": "ui",
+                "generated_by": "ai",
+                "status": "draft",
+                "raw_response": response[:10000]  # 增加长度限制
+            }
+            if python_code_extracted:
+                result["python_code"] = python_code_extracted
+                result["description"] = "JSON解析部分失败，但已提取Python代码"
+            logger.warning(f"无法解析JSON，返回原始响应（包含{'代码' if python_code_extracted else '无代码'}）")
+            return [result]
                     
-        except json.JSONDecodeError as e:
-            logger.warning(f"UI测试JSON解析失败: {e}")
-            return [{
-                "name": "AI生成的UI测试",
-                "description": response,
-                "test_type": "ui",
-                "generated_by": "ai",
-                "status": "draft",
-                "raw_response": response,
-                "parsing_error": str(e)
-            }]
         except Exception as e:
-            logger.error(f"UI测试解析失败: {e}")
+            logger.error(f"UI测试解析失败: {e}", exc_info=True)
             return [{
                 "name": "AI生成的UI测试",
-                "description": response,
+                "description": f"解析失败: {str(e)}",
                 "test_type": "ui",
                 "generated_by": "ai",
                 "status": "draft",
-                "raw_response": response,
+                "raw_response": response[:5000] if response else "",
                 "parsing_error": str(e)
             }] 

@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { 
   Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography, 
   message, Popconfirm, Progress, Divider, Descriptions, Drawer, 
@@ -54,11 +55,14 @@ interface TestCase {
 }
 
 const TestRuns: React.FC = () => {
+  const location = useLocation();
   const [items, setItems] = useState<TestRun[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const isMountedRef = useRef(true);
+  const isCurrentRouteRef = useRef(false);
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
   const [selectedTestRun, setSelectedTestRun] = useState<TestRun | null>(null);
   const [testRunDetail, setTestRunDetail] = useState<any>(null);
@@ -104,39 +108,146 @@ const TestRuns: React.FC = () => {
     }
   }, []);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  const fetchData = useCallback(async (showLoading: boolean = true) => {
+    // 首先检查是否是当前路由 - 必须在最前面检查
+    const isCurrentRoute = location.pathname === '/test-runs';
+    if (!isCurrentRoute) {
+      console.log('[TestRuns] 不是当前路由，不加载数据', { pathname: location.pathname });
+      if (showLoading) {
+        setLoading(false);
+      }
+      return;
+    }
+    
+    console.log('[TestRuns] 开始加载数据', { isMounted: isMountedRef.current, isCurrentRoute: isCurrentRouteRef.current, pathname: location.pathname });
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
       const params = selectedProjectId ? { project_id: selectedProjectId } : undefined;
       const data = await listTestRuns(params);
-      setItems(Array.isArray(data) ? data : []);
+      const newItems = Array.isArray(data) ? data : [];
+      // 检查路由（异步操作后）
+      if (location.pathname !== '/test-runs') {
+        console.warn('[TestRuns] 不在测试执行页面，不更新状态');
+        if (showLoading) {
+          setLoading(false);
+        }
+        return;
+      }
+      // 如果新数据为空，但之前有数据，保留旧数据（防止数据丢失）
+      setItems(prev => {
+        if (location.pathname !== '/test-runs') {
+          return prev;
+        }
+        if (newItems.length === 0 && prev.length > 0) {
+          console.warn('[数据加载] 后端返回空数组，保留现有数据');
+          return prev;
+        }
+        return newItems;
+      });
     } catch (e: any) {
+      // 如果是AbortError，说明请求被取消，不显示错误
+      if (e.name === 'AbortError' || e.name === 'CanceledError') {
+        // 请求被取消，直接清除loading
+        if (showLoading) {
+          setLoading(false);
+        }
+        return;
+      }
       if (e?.response?.status === 404 || e?.response?.status === 200) {
-        setItems([]);
+        // 404 或空数据时，如果之前有数据，保留旧数据
+        if (isMountedRef.current && isCurrentRouteRef.current) {
+          setItems(prev => {
+            if (prev.length > 0) {
+              console.warn('[数据加载] 请求返回空，保留现有数据');
+              return prev;
+            }
+            return [];
+          });
+        }
       } else {
         console.error('加载测试运行失败:', e);
       }
+      // 无论什么情况，都要清除loading（不依赖路由检查）
+      if (showLoading) {
+        setLoading(false);
+      }
     } finally {
-      setLoading(false);
+      // 确保loading被清除（双重保险）
+      if (showLoading) {
+        setLoading(false);
+      }
     }
-  }, [selectedProjectId]);
+  }, [selectedProjectId, location.pathname]);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  // 监听路由变化 - 使用 useLayoutEffect 确保在渲染前执行
+  useLayoutEffect(() => {
+    const isTestRunsRoute = location.pathname === '/test-runs';
+    const wasCurrentRoute = isCurrentRouteRef.current;
+    isCurrentRouteRef.current = isTestRunsRoute;
+
+    console.log('[TestRuns] 路由变化', { pathname: location.pathname, isCurrentRoute: isTestRunsRoute, wasCurrentRoute });
+
+    if (!isTestRunsRoute) {
+      // 不是当前路由，立即停止所有操作（必须在渲染前清除）
+      console.log('[TestRuns] 离开当前路由，立即清除状态');
+      isMountedRef.current = false;
+      setLoading(false); // 强制清除loading，无论之前是否在当前路由
+      // 清除轮询
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // 是当前路由，确保标记已设置
+    isMountedRef.current = true;
+
+    // 首次进入页面时加载数据（只在之前不在当前路由时）
+    if (!wasCurrentRoute) {
+      console.log('[TestRuns] 首次进入测试执行页面，加载数据');
+      // 延迟执行，确保状态已设置
+      setTimeout(() => {
+        if (location.pathname === '/test-runs' && isMountedRef.current && isCurrentRouteRef.current) {
+          fetchData(true);
+        }
+      }, 0);
+    }
+  }, [location.pathname, fetchData]);
+
+  // 注意：不再使用 useEffect 自动加载数据，只在 useLayoutEffect 中处理
+  // 这样可以避免重复调用和 loading 状态异常
 
   // 单独处理轮询逻辑
   useEffect(() => {
+    // 检查是否是当前路由
+    if (location.pathname !== '/test-runs') {
+      return;
+    }
+    
+    if (!isMountedRef.current || !isCurrentRouteRef.current) {
+      return;
+    }
+
     const hasRunning = items.some(item => item.status === 'running');
     
     if (hasRunning && !pollingIntervalRef.current) {
       // 有正在运行的测试，启动轮询
       const interval = setInterval(() => {
-        fetchData();
+        // 每次轮询前检查组件是否已挂载和是否是当前路由
+        if (!isMountedRef.current || !isCurrentRouteRef.current) {
+          clearInterval(interval);
+          pollingIntervalRef.current = null;
+          return;
+        }
+        // 不显示 loading，只更新数据
+        fetchData(false);
       }, 3000); // 每3秒刷新一次
       pollingIntervalRef.current = interval;
     } else if (!hasRunning && pollingIntervalRef.current) {
@@ -151,7 +262,7 @@ const TestRuns: React.FC = () => {
         pollingIntervalRef.current = null;
       }
     };
-  }, [items, fetchData]);
+  }, [items, fetchData, location.pathname]);
 
   useEffect(() => {
     if (selectedProjectId) {
@@ -761,13 +872,6 @@ const TestRuns: React.FC = () => {
               >
                 查看报告
               </Button>
-              <Button 
-                icon={<DownloadOutlined />} 
-                size="small"
-                onClick={() => handleDownloadReport(record.id, 'csv')}
-              >
-                下载CSV
-              </Button>
             </>
           )}
           <Button
@@ -808,9 +912,15 @@ const TestRuns: React.FC = () => {
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建测试运行
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
+            <Button icon={<ReloadOutlined />} onClick={() => {
+              // 强制清除loading状态，然后刷新
+              setLoading(false);
+              if (location.pathname === '/test-runs') {
+                fetchData(true);
+              }
+            }} loading={loading && location.pathname === '/test-runs'}>
             刷新
-          </Button>
+            </Button>
           <Select
             placeholder="筛选项目"
             allowClear

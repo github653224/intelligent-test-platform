@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 from ai_engine.models.ai_client import AIClient
 from ai_engine.processors.smart_element_locator import SmartElementLocator, ElementLocator
 
@@ -17,16 +17,17 @@ class UITestGenerator:
     async def generate(
         self, 
         page_url: str, 
-        user_actions: List[str], 
-        test_scenarios: List[str] = None
+        user_actions: Union[str, List[str]], 
+        test_scenarios: List[str] = None,
+        page_info: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
-        """生成UI自动化测试脚本"""
+        """生成UI自动化测试脚本（支持页面分析和业务需求）"""
         
         if test_scenarios is None:
             test_scenarios = []
         
-        # 构建生成提示词
-        prompt = self._build_generation_prompt(page_url, user_actions, test_scenarios)
+        # 构建生成提示词（包含页面分析结果）
+        prompt = self._build_generation_prompt(page_url, user_actions, test_scenarios, page_info)
         
         try:
             # 调用AI生成UI测试
@@ -35,8 +36,11 @@ class UITestGenerator:
             # 解析生成的UI测试
             ui_tests = self._parse_ui_tests_response(response)
             
-            # 为每个测试添加智能定位器
-            ui_tests = await self._enhance_with_smart_locators(ui_tests, user_actions)
+            # 为每个测试添加智能定位器（如果有页面信息，使用实际元素信息）
+            if page_info:
+                ui_tests = await self._enhance_with_page_info(ui_tests, page_info)
+            else:
+                ui_tests = await self._enhance_with_smart_locators(ui_tests, user_actions)
             
             return ui_tests
             
@@ -51,27 +55,137 @@ class UITestGenerator:
     def _build_generation_prompt(
         self, 
         page_url: str, 
-        user_actions: List[str], 
-        test_scenarios: List[str]
+        user_actions: Union[str, List[str]], 
+        test_scenarios: List[str],
+        page_info: Dict[str, Any] = None
     ) -> str:
-        """构建生成提示词"""
+        """构建生成提示词（支持页面分析结果和业务需求）"""
         
-        actions_text = "\n".join([f"- {action}" for action in user_actions])
+        # 处理用户需求（可能是文本描述或操作列表）
+        if isinstance(user_actions, str):
+            # 如果是字符串，作为业务需求描述
+            user_requirement = user_actions.strip() if user_actions.strip() else "未指定具体业务需求，请根据页面结构和功能自动推断测试场景"
+        elif isinstance(user_actions, list) and user_actions:
+            # 如果是列表，转换为文本
+            user_requirement = "\n".join([f"- {action}" for action in user_actions])
+        else:
+            user_requirement = "未指定具体业务需求，请根据页面结构和功能自动推断测试场景"
+        
         scenarios_text = ""
         if test_scenarios:
-            scenarios_text = f"\n测试场景：{', '.join(test_scenarios)}"
+            scenarios_text = f"\n测试场景类型：{', '.join(test_scenarios)}"
+        
+        # 如果有页面分析结果，添加页面结构信息
+        page_structure_info = ""
+        if page_info:
+            structure = page_info.get("structure", {})
+            element_count = page_info.get("element_count", {})
+            
+            page_structure_info = f"""
+【页面结构分析】（已自动分析页面）
+页面标题: {page_info.get('title', '无标题')}
+页面描述: {page_info.get('description', '无描述')}
+
+【页面元素统计】
+- 标题: {element_count.get('headings', 0)} 个
+- 链接: {element_count.get('links', 0)} 个
+- 按钮: {element_count.get('buttons', 0)} 个
+- 输入框: {element_count.get('inputs', 0)} 个
+- 表单: {element_count.get('forms', 0)} 个
+
+【主要按钮列表】
+"""
+            for btn in structure.get("buttons", [])[:20]:
+                btn_text = btn.get("text") or btn.get("ariaLabel") or "无文本"
+                btn_id = btn.get("id")
+                btn_type = btn.get("type", "button")
+                data_test_id = btn.get("dataTestId")
+                page_structure_info += f"- {btn_text} (id: {btn_id}, type: {btn_type}, data-testid: {data_test_id})\n"
+            
+            page_structure_info += "\n【输入框列表】\n"
+            for inp in structure.get("inputs", [])[:20]:
+                inp_name = inp.get("name") or inp.get("id") or inp.get("placeholder") or "未命名"
+                inp_type = inp.get("type", "text")
+                inp_required = "必填" if inp.get("required") else "可选"
+                page_structure_info += f"- {inp_type}: {inp_name} ({inp_required})\n"
+            
+            page_structure_info += "\n【页面主要内容】\n"
+            text_content = page_info.get("text_content", "")[:1500]  # 限制长度
+            page_structure_info += text_content
+        
+        # 处理用户需求（可能是文本描述或操作列表）
+        user_requirement = ""
+        if user_actions:
+            if isinstance(user_actions, list):
+                # 如果是列表，转换为文本
+                user_requirement = "\n".join([f"- {action}" for action in user_actions])
+            else:
+                # 如果是字符串，直接使用
+                user_requirement = user_actions
+        else:
+            user_requirement = "未指定具体业务需求，请根据页面结构和功能自动推断测试场景"
         
         prompt = f"""
-        作为专业的UI自动化测试专家，请基于以下页面和用户操作生成自动化测试脚本：
+作为专业的UI自动化测试专家，请基于以下页面信息和**业务需求**生成**工程化的、可直接运行的**自动化测试脚本。
 
-        【页面URL】
-        {page_url}
+【重要要求】
+1. **必须结合业务需求生成测试**，不仅仅是简单的点击操作，要覆盖完整的业务流程
+2. **必须基于实际的页面结构生成测试代码**（如果提供了页面分析结果，必须使用实际元素信息）
+3. **代码必须可以直接运行**，包含所有必要的导入和配置
+4. **使用工程化的代码结构**：类、方法、模块化设计
+5. **提供完整的项目结构建议**：目录结构、文件组织
+6. **生成完整的业务流程测试**，包括：
+   - 正常流程测试（happy path）
+   - 异常流程测试（错误处理）
+   - 边界条件测试
+   - 数据验证测试
 
-        【用户操作】
-        {actions_text}
-        {scenarios_text}
+【页面URL】
+{page_url}
+{page_structure_info}
 
-        请生成以下内容（以JSON格式返回）：
+【业务需求/测试场景】
+{user_requirement}
+
+【测试场景类型】
+{scenarios_text}
+
+【业务测试示例】
+根据不同的业务需求，生成相应的测试：
+
+1. **用户注册/登录场景**：
+   - 测试注册流程：填写表单 → 验证输入 → 提交 → 验证成功
+   - 测试登录流程：输入凭证 → 点击登录 → 验证跳转
+   - 测试错误处理：错误密码、空字段、格式验证等
+
+2. **电商购物场景**：
+   - 测试商品搜索：输入关键词 → 筛选 → 查看结果
+   - 测试添加到购物车：选择商品 → 选择规格 → 添加到购物车 → 验证数量
+   - 测试下单流程：填写收货信息 → 选择支付方式 → 提交订单 → 验证订单号
+
+3. **数据管理场景**：
+   - 测试数据录入：填写表单 → 验证必填项 → 提交 → 验证保存成功
+   - 测试数据查询：输入查询条件 → 点击搜索 → 验证结果列表
+   - 测试数据编辑：打开编辑 → 修改数据 → 保存 → 验证更新
+
+4. **审批流程场景**：
+   - 测试提交审批：填写申请 → 上传附件 → 提交 → 验证状态
+   - 测试审批操作：查看详情 → 填写意见 → 批准/拒绝 → 验证流程
+
+5. **报表查看场景**：
+   - 测试报表生成：选择时间范围 → 选择维度 → 生成报表 → 验证数据
+   - 测试数据导出：生成报表 → 点击导出 → 验证文件下载
+
+请根据上述业务需求，生成完整的业务流程测试代码。
+
+【代码生成要求】
+1. **必须覆盖完整的业务流程**，不仅仅是单个操作
+2. **包含数据准备、操作执行、结果验证**的完整流程
+3. **生成多个测试用例**：正常流程、异常流程、边界条件
+4. **使用实际页面元素**（如果提供了页面分析结果）
+5. **代码必须可以直接运行**
+
+请生成以下内容（以JSON格式返回）：
 
         {{
             "ui_tests": [

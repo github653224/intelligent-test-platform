@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List, Union, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -65,12 +65,14 @@ class APITestRequest(BaseModel):
     api_documentation: str
     base_url: str
     test_scenarios: List[str] = []
+    parsed_doc: Optional[Dict[str, Any]] = None  # 解析后的API文档结构
 
 
 class UITestRequest(BaseModel):
     page_url: str
-    user_actions: List[str]
+    user_actions: Union[str, List[str]]  # 支持字符串（业务需求描述）或列表（操作步骤）
     test_scenarios: List[str] = []
+    page_info: Optional[Dict[str, Any]] = None  # 页面分析结果（可选）
 
 
 class ModelSwitchRequest(BaseModel):
@@ -116,17 +118,15 @@ async def generate_test_cases(request: TestCaseRequest):
 
 @app.post("/generate_api_tests")
 async def generate_api_tests(request: APITestRequest):
-    """生成API测试脚本"""
+    """生成API测试脚本（工程化结构）"""
     try:
-        api_tests = await api_test_generator.generate(
+        result = await api_test_generator.generate(
             request.api_documentation,
             request.base_url,
-            request.test_scenarios
+            request.test_scenarios,
+            request.parsed_doc
         )
-        return {
-            "status": "success",
-            "api_tests": api_tests
-        }
+        return result
     except Exception as e:
         logger.error(f"API测试生成失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -134,12 +134,13 @@ async def generate_api_tests(request: APITestRequest):
 
 @app.post("/generate_ui_tests")
 async def generate_ui_tests(request: UITestRequest):
-    """生成UI自动化测试脚本"""
+    """生成UI自动化测试脚本（支持页面分析）"""
     try:
         ui_tests = await ui_test_generator.generate(
             request.page_url,
             request.user_actions,
-            request.test_scenarios
+            request.test_scenarios,
+            request.page_info
         )
         return {
             "status": "success",

@@ -55,7 +55,21 @@ GET /api/v1/test-runs/{id}/report/summary - 摘要报告
 GET /api/v1/test-runs/{id}/report/detailed - 详细报告
 GET /api/v1/test-runs/{id}/report/html - HTML 报告
 GET /api/v1/test-runs/{id}/report/json - JSON 报告
-GET /api/v1/test-runs/{id}/report/csv - CSV 报告（可下载）
+GET /api/v1/test-runs/{id}/report/csv - CSV 报告（可下载关键指标摘要:
+
+总请求数: 1054 次
+
+请求速率: 36.53 req/s
+
+错误率: 0.0%
+
+平均响应时间: 0.258 秒
+
+最大响应时间: 0.470 秒
+
+P95响应时间: 0.307 秒
+
+并发用户数: 100 个）
 6. 依赖更新
 添加了 aiohttp==3.9.1 到 requirements.txt（用于异步 HTTP 请求）
 主要特性

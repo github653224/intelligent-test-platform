@@ -42,12 +42,14 @@ class APITestGenerationRequest(BaseModel):
     api_documentation: str
     base_url: str
     test_scenarios: List[str] = []
+    parsed_doc: Dict[str, Any] = None  # 解析后的API文档结构（可选）
 
 
 class UITestGenerationRequest(BaseModel):
     page_url: str
-    user_actions: List[str]
+    user_actions: Union[str, List[str]]  # 支持字符串（业务需求描述）或列表（操作步骤）
     test_scenarios: List[str] = []
+    page_info: Dict[str, Any] = None  # 页面分析结果（可选）
 
 
 @router.post("/analyze-requirement")
@@ -100,27 +102,28 @@ async def generate_test_cases(request: TestCaseGenerationRequest):
 
 @router.post("/generate-api-tests")
 async def generate_api_tests(request: APITestGenerationRequest):
-    """生成API测试脚本"""
+    """生成API测试脚本（工程化结构）"""
     try:
         async with httpx.AsyncClient() as client:
+            request_data = {
+                "api_documentation": request.api_documentation,
+                "base_url": request.base_url,
+                "test_scenarios": request.test_scenarios
+            }
+            
+            # 如果提供了parsed_doc，添加到请求中
+            if request.parsed_doc:
+                request_data["parsed_doc"] = request.parsed_doc
+            
             response = await client.post(
                 f"{AI_ENGINE_URL}/generate_api_tests",
-                json={
-                    "api_documentation": request.api_documentation,
-                    "base_url": request.base_url,
-                    "test_scenarios": request.test_scenarios
-                },
-                timeout=180.0  # 增加到3分钟，因为AI生成可能需要更长时间
+                json=request_data,
+                timeout=300.0  # 增加到5分钟，因为生成所有接口的测试代码需要更长时间
             )
             response.raise_for_status()
             result = response.json()
-            # 确保返回格式正确
-            if isinstance(result, dict):
-                return result
-            elif isinstance(result, list):
-                return {"api_tests": result, "status": "success"}
-            else:
-                return {"api_tests": [], "status": "success", "raw_response": str(result)}
+            # 直接返回结果（已经是工程化结构）
+            return result
     except httpx.TimeoutException as e:
         logger.error(f"AI引擎请求超时: {e}")
         raise HTTPException(status_code=504, detail="AI引擎请求超时，请稍后重试")
@@ -132,19 +135,57 @@ async def generate_api_tests(request: APITestGenerationRequest):
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
 
 
+@router.post("/analyze-page")
+async def analyze_page(request: Dict[str, Any]):
+    """
+    分析页面结构
+    使用Playwright自动访问URL并提取页面元素信息
+    """
+    try:
+        from app.services.page_analyzer import PageAnalyzer
+        
+        page_url = request.get("url")
+        if not page_url:
+            raise HTTPException(status_code=400, detail="缺少URL参数")
+        
+        wait_time = request.get("wait_time", 2000)
+        
+        # 分析页面
+        analyzer = PageAnalyzer()
+        page_info = analyzer.analyze(page_url, wait_time)
+        
+        # 生成页面摘要
+        summary = analyzer.generate_page_summary(page_info)
+        
+        return {
+            "success": True,
+            "page_info": page_info,
+            "summary": summary
+        }
+    except Exception as e:
+        logger.error(f"页面分析失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"页面分析失败: {str(e)}")
+
+
 @router.post("/generate-ui-tests")
 async def generate_ui_tests(request: UITestGenerationRequest):
     """生成UI自动化测试脚本"""
     try:
         async with httpx.AsyncClient() as client:
+            request_data = {
+                "page_url": request.page_url,
+                "user_actions": request.user_actions,
+                "test_scenarios": request.test_scenarios
+            }
+            
+            # 如果提供了page_info，添加到请求中
+            if request.page_info:
+                request_data["page_info"] = request.page_info
+            
             response = await client.post(
                 f"{AI_ENGINE_URL}/generate_ui_tests",
-                json={
-                    "page_url": request.page_url,
-                    "user_actions": request.user_actions,
-                    "test_scenarios": request.test_scenarios
-                },
-                timeout=180.0  # 增加到3分钟，因为AI生成可能需要更长时间
+                json=request_data,
+                timeout=300.0  # 增加到5分钟，因为页面分析和AI生成需要更长时间
             )
             response.raise_for_status()
             result = response.json()
@@ -312,3 +353,43 @@ async def parse_document(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"解析文档失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"文档解析失败: {str(e)}")
+
+
+@router.post("/parse-api-document")
+async def parse_api_document(file: UploadFile = File(...)):
+    """
+    解析上传的API文档文件（OpenAPI/Swagger JSON/YAML、Postman Collection）
+    返回解析后的API文档结构
+    """
+    try:
+        from app.utils.api_doc_parser import APIDocParser
+        
+        # 读取文件内容
+        file_content = await file.read()
+        
+        if not file_content:
+            raise HTTPException(status_code=400, detail="文件内容为空")
+        
+        # 解析API文档
+        parsed_doc = APIDocParser.parse(file_content, file.filename or "unknown")
+        
+        # 提取摘要用于AI生成
+        summary = APIDocParser.extract_endpoints_summary(parsed_doc)
+        
+        return {
+            "success": True,
+            "filename": file.filename,
+            "parsed_doc": parsed_doc,
+            "summary": summary,
+            "endpoints_count": len(parsed_doc.get("endpoints", [])),
+            "base_url": parsed_doc.get("base_url", "")
+        }
+    except ValueError as e:
+        logger.error(f"API文档解析错误: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except ImportError as e:
+        logger.error(f"缺少依赖库: {e}")
+        raise HTTPException(status_code=500, detail=f"服务器缺少必要的依赖库: {str(e)}")
+    except Exception as e:
+        logger.error(f"解析API文档失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"API文档解析失败: {str(e)}")

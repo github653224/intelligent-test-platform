@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from app.db.session import get_db
 from app.models.project import Project, Requirement, TestCase, TestRun
+from app.models.performance_test import PerformanceTest
 
 router = APIRouter()
 
@@ -99,6 +100,37 @@ def get_dashboard_statistics(db: Session = Depends(get_db)) -> Dict[str, Any]:
             if tr.results and isinstance(tr.results, dict) and tr.results.get("scheduled"):
                 scheduled_count += 1
         
+        # 性能测试统计
+        total_performance_tests = db.query(func.count(PerformanceTest.id)).scalar() or 0
+        
+        # 性能测试状态分布
+        performance_pending = db.query(func.count(PerformanceTest.id)).filter(
+            PerformanceTest.status == "pending"
+        ).scalar() or 0
+        performance_running = db.query(func.count(PerformanceTest.id)).filter(
+            PerformanceTest.status == "running"
+        ).scalar() or 0
+        performance_completed = db.query(func.count(PerformanceTest.id)).filter(
+            PerformanceTest.status == "completed"
+        ).scalar() or 0
+        performance_failed = db.query(func.count(PerformanceTest.id)).filter(
+            PerformanceTest.status == "failed"
+        ).scalar() or 0
+        
+        # 已完成性能测试中有分析结果的数量
+        performance_with_analysis = db.query(func.count(PerformanceTest.id)).filter(
+            and_(
+                PerformanceTest.status.in_(["completed", "failed"]),
+                PerformanceTest.analysis.isnot(None)
+            )
+        ).scalar() or 0
+        
+        # 最近7天的性能测试统计
+        recent_performance_tests = db.query(PerformanceTest).filter(
+            PerformanceTest.created_at >= seven_days_ago
+        ).all() if hasattr(PerformanceTest, 'created_at') else []
+        recent_performance_count = len(recent_performance_tests)
+        
         return {
             "total_projects": total_projects,
             "total_requirements": total_requirements,
@@ -124,6 +156,17 @@ def get_dashboard_statistics(db: Session = Depends(get_db)) -> Dict[str, Any]:
                 "ui": ui_count,
             },
             "scheduled_test_runs": scheduled_count,
+            "performance_tests": {
+                "total": total_performance_tests,
+                "status": {
+                    "pending": performance_pending,
+                    "running": performance_running,
+                    "completed": performance_completed,
+                    "failed": performance_failed,
+                },
+                "with_analysis": performance_with_analysis,
+                "recent_count": recent_performance_count,
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")

@@ -15,6 +15,7 @@ import {
   Switch,
   Upload,
   Modal,
+  theme,
 } from 'antd';
 import { Markmap } from 'markmap-view';
 import { Transformer } from 'markmap-lib';
@@ -31,7 +32,7 @@ import {
   UploadOutlined,
   FileWordOutlined,
 } from '@ant-design/icons';
-import { analyzeRequirementStream, generateTestCases, generateTestCasesStream, generateAPITests, generateUITests, parseDocument } from '../services/aiService';
+import { analyzeRequirementStream, generateTestCases, generateTestCasesStream, generateAPITests, generateUITests, parseDocument, parseAPIDocument, analyzePage } from '../services/aiService';
 import type { UploadProps } from 'antd';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -49,6 +50,11 @@ interface AnalysisJsonData {
 }
 
 const AIEngine: React.FC = () => {
+  // 获取主题token
+  const {
+    token: { colorBgContainer, colorFillSecondary, colorBorder, colorInfoBg, colorInfoBorder },
+  } = theme.useToken();
+  
   // 添加loading状态声明
   const [loading, setLoading] = useState<boolean>(false);
   const [results, setResults] = useState<any>(null);
@@ -70,6 +76,8 @@ const AIEngine: React.FC = () => {
   const [testCaseFormData, setTestCaseFormData] = useState<any>({});
   const [apiTestFormData, setApiTestFormData] = useState<any>({});
   const [uiTestFormData, setUITestFormData] = useState<any>({});
+  const [parsedAPIDoc, setParsedAPIDoc] = useState<any>(null);  // 解析后的API文档
+  const [analyzedPageInfo, setAnalyzedPageInfo] = useState<any>(null);  // 页面分析结果
   
   // Form 实例
   const [requirementForm] = Form.useForm();
@@ -2255,16 +2263,151 @@ const AIEngine: React.FC = () => {
     }
   };
 
+  // 处理API文档上传
+  const handleAPIDocumentUpload: UploadProps['customRequest'] = async (options) => {
+    const { file, onSuccess, onError } = options;
+    const fileObj = file as File;
+    
+    // 验证文件类型
+    const fileExt = fileObj.name.split('.').pop()?.toLowerCase();
+    const allowedExts = ['json', 'yaml', 'yml'];
+    
+    if (!fileExt || !allowedExts.includes(fileExt)) {
+      message.error('不支持的文件格式。仅支持: OpenAPI/Swagger (.json, .yaml, .yml), Postman Collection (.json)');
+      onError?.(new Error('不支持的文件格式'));
+      return;
+    }
+    
+    // 验证文件大小（最大10MB）
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (fileObj.size > maxSize) {
+      message.error('文件大小不能超过10MB');
+      onError?.(new Error('文件大小超过限制'));
+      return;
+    }
+    
+    try {
+      message.loading({ content: '正在解析API文档...', key: 'parse-api-doc', duration: 0 });
+      
+      const result = await parseAPIDocument(fileObj);
+      
+      if (result.success && result.parsed_doc) {
+        // 保存解析后的文档
+        setParsedAPIDoc(result.parsed_doc);
+        
+        // 自动填充表单
+        apiTestForm.setFieldsValue({
+          api_documentation: result.summary,
+          base_url: result.base_url || apiTestFormData.base_url || ''
+        });
+        
+        // 更新表单数据状态
+        setApiTestFormData({
+          ...apiTestFormData,
+          api_documentation: result.summary,
+          base_url: result.base_url || apiTestFormData.base_url || ''
+        });
+        
+        message.success({
+          content: `API文档解析成功！发现 ${result.endpoints_count} 个接口。文件名: ${result.filename}`,
+          key: 'parse-api-doc',
+          duration: 4
+        });
+        
+        onSuccess?.(result);
+      } else {
+        throw new Error('API文档解析失败：未提取到接口信息');
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || 'API文档解析失败';
+      message.error({
+        content: errorMsg,
+        key: 'parse-api-doc',
+        duration: 4
+      });
+      onError?.(error);
+    }
+  };
+
   const handleAPITestGeneration = async (values: any) => {
     setLoading(true);
     setProgressVisible(true);
     setProgress(0);
     try {
-      const response = await generateAPITests(values);
+      // 如果已解析API文档，传递parsed_doc
+      const requestData: any = {
+        api_documentation: values.api_documentation,
+        base_url: values.base_url,
+        test_scenarios: values.test_scenarios || []
+      };
+      
+      if (parsedAPIDoc) {
+        requestData.parsed_doc = parsedAPIDoc;
+      }
+      
+      const response = await generateAPITests(requestData);
       setResults({ type: 'api_test_generation', data: response });
       message.success('API测试生成完成！');
     } catch (error) {
       message.error('API测试生成失败，请重试');
+    } finally {
+      setLoading(false);
+      setProgressVisible(false);
+    }
+  };
+
+  // 处理页面分析
+  const handlePageAnalysis = async (pageUrl: string) => {
+    if (!pageUrl || !pageUrl.trim()) {
+      message.warning('请输入页面URL');
+      return;
+    }
+    
+    // 验证URL格式
+    try {
+      new URL(pageUrl);
+    } catch {
+      message.error('URL格式不正确，请输入完整的URL（如：https://example.com）');
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      message.loading({ content: '正在分析页面结构...', key: 'analyze-page', duration: 0 });
+      
+      const result = await analyzePage(pageUrl, 2000);
+      
+      if (result.success && result.page_info) {
+        // 保存页面分析结果
+        setAnalyzedPageInfo(result.page_info);
+        
+        // 自动填充表单
+        uiTestForm.setFieldsValue({
+          page_url: pageUrl
+        });
+        
+        // 更新表单数据状态
+        setUITestFormData({
+          ...uiTestFormData,
+          page_url: pageUrl
+        });
+        
+        const elementCount = result.page_info.element_count || {};
+        message.success({
+          content: `页面分析成功！发现 ${elementCount.buttons || 0} 个按钮，${elementCount.inputs || 0} 个输入框，${elementCount.forms || 0} 个表单。`,
+          key: 'analyze-page',
+          duration: 5
+        });
+      } else {
+        throw new Error('页面分析失败：未获取到页面信息');
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || '页面分析失败';
+      message.error({
+        content: errorMsg,
+        key: 'analyze-page',
+        duration: 4
+      });
     } finally {
       setLoading(false);
     }
@@ -2275,13 +2418,38 @@ const AIEngine: React.FC = () => {
     setProgressVisible(true);
     setProgress(0);
     try {
-      const response = await generateUITests(values);
+      // 处理user_actions：如果是字符串，保持字符串；如果是数组，转换为数组
+      let userActions: string | string[] = values.user_actions;
+      if (typeof userActions === 'string' && userActions.trim()) {
+        // 如果是字符串，保持原样（业务需求描述）
+        userActions = userActions.trim();
+      } else if (Array.isArray(userActions) && userActions.length > 0) {
+        // 如果是数组，保持数组格式
+        userActions = userActions;
+      } else {
+        // 如果为空，设置为空字符串（让AI自动推断）
+        userActions = "";
+      }
+      
+      // 如果已分析页面，传递page_info
+      const requestData: any = {
+        page_url: values.page_url,
+        user_actions: userActions,
+        test_scenarios: values.test_scenarios || []
+      };
+      
+      if (analyzedPageInfo) {
+        requestData.page_info = analyzedPageInfo;
+      }
+      
+      const response = await generateUITests(requestData);
       setResults({ type: 'ui_test_generation', data: response });
       message.success('UI测试生成完成！');
     } catch (error) {
       message.error('UI测试生成失败，请重试');
     } finally {
       setLoading(false);
+      setProgressVisible(false);
     }
   };
 
@@ -2532,11 +2700,117 @@ const AIEngine: React.FC = () => {
     return '';
   };
 
-  // 提取测试脚本代码
+  // 提取测试脚本代码（支持工程化结构）
   const extractScriptCode = (data: any): string => {
     if (!data) return '';
     
-    // 如果是数组，提取所有测试的代码
+    // 如果是工程化结构（新格式）
+    if (data.status === 'success' && (data.project_structure || data.api_client_class || data.api_tests)) {
+      const allCode: string[] = [];
+      
+      // 1. 项目结构说明
+      if (data.project_structure) {
+        allCode.push('# ============================================');
+        allCode.push('# 项目结构说明');
+        allCode.push('# ============================================');
+        allCode.push(data.project_structure.description || '');
+        allCode.push('');
+        if (data.project_structure.directories) {
+          allCode.push('## 目录结构');
+          data.project_structure.directories.forEach((dir: string) => {
+            allCode.push(`# ${dir}`);
+          });
+          allCode.push('');
+        }
+        if (data.project_structure.files) {
+          allCode.push('## 文件列表');
+          data.project_structure.files.forEach((file: string) => {
+            allCode.push(`# ${file}`);
+          });
+          allCode.push('');
+        }
+      }
+      
+      // 2. API客户端类
+      if (data.api_client_class && data.api_client_class.code) {
+        allCode.push('# ============================================');
+        allCode.push(`# ${data.api_client_class.class_name || 'APIClient'}`);
+        allCode.push(`# ${data.api_client_class.description || ''}`);
+        allCode.push('# ============================================');
+        allCode.push(extractPythonCode(data.api_client_class.code));
+        allCode.push('');
+      }
+      
+      // 3. 配置文件
+      if (data.config_file && data.config_file.code) {
+        allCode.push('# ============================================');
+        allCode.push(`# ${data.config_file.file_name || 'config/settings.py'}`);
+        allCode.push(`# ${data.config_file.description || '配置文件'}`);
+        allCode.push('# ============================================');
+        allCode.push(extractPythonCode(data.config_file.code));
+        allCode.push('');
+      }
+      
+      // 4. conftest.py
+      if (data.conftest && data.conftest.code) {
+        allCode.push('# ============================================');
+        allCode.push('# conftest.py');
+        allCode.push(`# ${data.conftest.description || 'pytest配置文件'}`);
+        allCode.push('# ============================================');
+        allCode.push(extractPythonCode(data.conftest.code));
+        allCode.push('');
+      }
+      
+      // 5. API测试文件
+      if (data.api_tests && Array.isArray(data.api_tests)) {
+        data.api_tests.forEach((test: any) => {
+          allCode.push('# ============================================');
+          allCode.push(`# ${test.file_name || 'test_api.py'}`);
+          allCode.push(`# ${test.class_name || 'TestAPI'}`);
+          allCode.push(`# ${test.description || ''}`);
+          allCode.push('# ============================================');
+          
+          // 优先使用full_class_code，如果没有则组合test_methods
+          if (test.full_class_code) {
+            allCode.push(extractPythonCode(test.full_class_code));
+          } else if (test.test_methods && Array.isArray(test.test_methods)) {
+            allCode.push(`class ${test.class_name || 'TestAPI'}:`);
+            test.test_methods.forEach((method: any) => {
+              allCode.push('');
+              allCode.push(`    # ${method.description || ''}`);
+              allCode.push(`    ${extractPythonCode(method.code)}`);
+            });
+          }
+          allCode.push('');
+        });
+      }
+      
+      // 6. requirements.txt
+      if (data.requirements && data.requirements.packages) {
+        allCode.push('# ============================================');
+        allCode.push('# requirements.txt');
+        allCode.push(`# ${data.requirements.description || '依赖包列表'}`);
+        allCode.push('# ============================================');
+        data.requirements.packages.forEach((pkg: string) => {
+          allCode.push(pkg);
+        });
+        allCode.push('');
+      }
+      
+      // 7. README.md
+      if (data.readme && data.readme.content) {
+        allCode.push('# ============================================');
+        allCode.push('# README.md');
+        allCode.push(`# ${data.readme.description || '项目说明文档'}`);
+        allCode.push('# ============================================');
+        allCode.push(data.readme.content);
+        allCode.push('');
+      }
+      
+      return allCode.join('\n');
+    }
+    
+    // 如果是数组，提取所有测试的代码（旧格式兼容）
     if (Array.isArray(data)) {
       const allCode: string[] = [];
       data.forEach((test: any, index: number) => {
@@ -2550,7 +2824,7 @@ const AIEngine: React.FC = () => {
       return allCode.join('\n');
     }
     
-    // 如果是对象，检查是否有api_tests或ui_tests
+    // 如果是对象，检查是否有api_tests或ui_tests（旧格式兼容）
     if (data.api_tests && Array.isArray(data.api_tests)) {
       const allCode: string[] = [];
       if (data.test_suite?.setup_code) {
@@ -2755,7 +3029,7 @@ const AIEngine: React.FC = () => {
       >
         {isScript && hasCode ? (
           <pre style={{ 
-            background: '#f5f5f5', 
+            background: colorFillSecondary, 
             padding: 16, 
             borderRadius: 6, 
             overflow: 'auto', 
@@ -2768,7 +3042,7 @@ const AIEngine: React.FC = () => {
             {scriptCode}
           </pre>
         ) : (
-          <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 6, overflow: 'auto', maxHeight: '600px' }}>
+          <pre style={{ background: colorFillSecondary, padding: 16, borderRadius: 6, overflow: 'auto', maxHeight: '600px' }}>
           {JSON.stringify(results.data, null, 2)}
         </pre>
         )}
@@ -2945,8 +3219,8 @@ const AIEngine: React.FC = () => {
                 marginTop: 16,
                 marginBottom: 8, 
                 padding: '8px 12px', 
-                background: '#e6f7ff', 
-                border: '1px solid #91d5ff',
+                background: colorInfoBg, 
+                border: `1px solid ${colorInfoBorder}`,
                 borderRadius: 4,
                 fontSize: '12px'
               }}>
@@ -2959,9 +3233,9 @@ const AIEngine: React.FC = () => {
               style={{
                 marginTop: (analysisJson as any)?.ai_model ? 8 : 16,
                 padding: 16,
-                border: '1px solid #d9d9d9',
+                border: `1px solid ${colorBorder}`,
                 borderRadius: 4,
-                backgroundColor: '#f5f5f5',
+                backgroundColor: colorFillSecondary,
                 height: '600px',
                 overflowY: 'scroll',
                 overflowX: 'auto',
@@ -3182,9 +3456,9 @@ const AIEngine: React.FC = () => {
               style={{
                 marginTop: 16,
                 padding: 16,
-                border: '1px solid #d9d9d9',
+                border: `1px solid ${colorBorder}`,
                 borderRadius: 4,
-                backgroundColor: '#f5f5f5',
+                backgroundColor: colorFillSecondary,
                 height: '600px',
                 overflowY: 'scroll',
                 overflowX: 'auto',
@@ -3398,8 +3672,8 @@ const AIEngine: React.FC = () => {
                       <div style={{ 
                         marginBottom: 8, 
                         padding: '8px 12px', 
-                        background: '#e6f7ff', 
-                        border: '1px solid #91d5ff',
+                        background: colorInfoBg, 
+                        border: `1px solid ${colorInfoBorder}`,
                         borderRadius: 4,
                         fontSize: '12px'
                       }}>
@@ -3531,11 +3805,28 @@ const AIEngine: React.FC = () => {
             onFinish={handleAPITestGeneration}
           >
             <Form.Item
-              label="API文档"
+              label={
+                <Space>
+                  <span>API文档</span>
+                  <Upload
+                    customRequest={handleAPIDocumentUpload}
+                    accept=".json,.yaml,.yml"
+                    showUploadList={false}
+                  >
+                    <Button icon={<UploadOutlined />} size="small" type="link">
+                      上传API文档
+                    </Button>
+                  </Upload>
+                </Space>
+              }
+              extra="支持OpenAPI/Swagger JSON/YAML、Postman Collection格式。上传后将自动解析并填充"
               name="api_documentation"
-              rules={[{ required: true, message: '请输入API文档' }]}
+              rules={[{ required: true, message: '请输入API文档或上传API文档文件' }]}
             >
-              <TextArea rows={6} placeholder="请输入API文档内容..." />
+              <TextArea 
+                rows={6} 
+                placeholder="请输入API文档内容，或点击上方按钮上传API文档文件（OpenAPI/Swagger、Postman Collection）..." 
+              />
             </Form.Item>
             <Form.Item
               label="基础URL"
@@ -3585,37 +3876,61 @@ const AIEngine: React.FC = () => {
             onFinish={handleUITestGeneration}
           >
             <Form.Item
-              label="页面URL"
+              label={
+                <Space>
+                  <span>页面URL</span>
+                  <Button 
+                    type="link" 
+                    size="small" 
+                    icon={<EyeOutlined />}
+                    onClick={() => {
+                      const pageUrl = uiTestForm.getFieldValue('page_url');
+                      if (pageUrl) {
+                        handlePageAnalysis(pageUrl);
+                      } else {
+                        message.warning('请先输入页面URL');
+                      }
+                    }}
+                    loading={loading}
+                  >
+                    分析页面
+                  </Button>
+                </Space>
+              }
+              extra="输入URL后点击'分析页面'按钮，系统将自动访问页面并分析结构，然后生成测试脚本"
               name="page_url"
               rules={[{ required: true, message: '请输入页面URL' }]}
             >
-              <Input placeholder="例如：https://example.com/login" />
-            </Form.Item>
-            <Form.Item
-              label="用户操作"
-              name="user_actions"
-              rules={[{ required: true, message: '请输入用户操作' }]}
-            >
-              <Select
-                mode="tags"
-                placeholder="输入用户操作步骤"
-                options={[
-                  { label: '点击登录按钮', value: 'click_login' },
-                  { label: '输入用户名', value: 'input_username' },
-                  { label: '输入密码', value: 'input_password' },
-                  { label: '提交表单', value: 'submit_form' },
-                ]}
+              <Input 
+                placeholder="例如：https://example.com/login" 
+                onPressEnter={(e) => {
+                  const url = (e.target as HTMLInputElement).value;
+                  if (url) {
+                    handlePageAnalysis(url);
+                  }
+                }}
               />
             </Form.Item>
-            <Form.Item label="测试场景" name="test_scenarios">
+            <Form.Item
+              label="业务需求/测试场景"
+              name="user_actions"
+              extra="描述您要测试的业务场景或功能，例如：'测试用户注册流程'、'测试商品添加到购物车'、'测试订单提交'等。如果不填写，AI将根据页面结构自动推断。"
+            >
+              <TextArea 
+                rows={4} 
+                placeholder="例如：测试用户注册完整流程，包括填写用户名、邮箱、密码，同意协议，点击注册按钮，验证注册成功提示。或者：测试商品搜索功能，输入关键词，筛选条件，查看搜索结果等。"
+              />
+            </Form.Item>
+            <Form.Item label="测试场景类型（可选）" name="test_scenarios">
               <Select
                 mode="tags"
-                placeholder="选择测试场景"
+                placeholder="选择测试场景类型（可选）"
                 options={[
-                  { label: '正常登录', value: 'normal_login' },
-                  { label: '错误密码', value: 'wrong_password' },
-                  { label: '空用户名', value: 'empty_username' },
-                  { label: '记住密码', value: 'remember_password' },
+                  { label: '正常流程', value: 'normal' },
+                  { label: '异常处理', value: 'error' },
+                  { label: '边界条件', value: 'boundary' },
+                  { label: '数据验证', value: 'validation' },
+                  { label: '性能测试', value: 'performance' },
                 ]}
               />
             </Form.Item>

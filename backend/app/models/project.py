@@ -52,6 +52,7 @@ class Project(Base):
     test_cases = relationship("TestCase", back_populates="project")
     test_suites = relationship("TestSuite", back_populates="project")
     test_runs = relationship("TestRun", back_populates="project")
+    performance_tests = relationship("PerformanceTest", back_populates="project")
 
 
 class Requirement(Base):

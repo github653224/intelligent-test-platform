@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.db.session import engine
 from app.models.base import Base
 from app.models.project import Project, Requirement, TestCase, TestStep, TestSuite, TestRun
+from app.models.performance_test import PerformanceTest
 
 def init_db():
     """创建所有数据库表"""
@@ -26,6 +27,7 @@ def init_db():
         print("  - test_steps")
         print("  - test_suites")
         print("  - test_runs")
+        print("  - performance_tests")
     except Exception as e:
         print(f"❌ 创建数据库表失败: {e}")
         print("\n请确保：")

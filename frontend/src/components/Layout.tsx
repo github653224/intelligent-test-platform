@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layout as AntLayout, Menu, theme } from 'antd';
+import { Layout as AntLayout, Menu, theme, Button, Space } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   DashboardOutlined,
@@ -7,8 +7,12 @@ import {
   FileTextOutlined,
   BugOutlined,
   PlayCircleOutlined,
+  ThunderboltOutlined,
   RobotOutlined,
+  MoonOutlined,
+  SunOutlined,
 } from '@ant-design/icons';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -20,8 +24,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [collapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { theme: themeMode, toggleTheme } = useTheme();
   const {
-    token: { colorBgContainer, borderRadiusLG },
+    token: { colorBgContainer, borderRadiusLG, colorBorderSecondary, colorBgLayout },
   } = theme.useToken();
 
   const menuItems = [
@@ -51,6 +56,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       label: '测试执行',
     },
     {
+      key: '/performance-tests',
+      icon: <ThunderboltOutlined />,
+      label: '性能测试',
+    },
+    {
       key: '/ai-engine',
       icon: <RobotOutlined />,
       label: 'AI引擎',
@@ -62,7 +72,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   return (
-    <AntLayout style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}>
+    <AntLayout style={{ 
+      minHeight: '100vh', 
+      height: '100vh', 
+      overflow: 'hidden',
+      background: colorBgLayout,
+    }}>
       <Sider 
         trigger={null} 
         collapsible 
@@ -101,25 +116,50 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           style={{ height: 'calc(100vh - 64px)', overflow: 'auto' }}
         />
       </Sider>
-      <AntLayout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin-left 0.2s' }}>
+      <AntLayout style={{ 
+        marginLeft: collapsed ? 80 : 200, 
+        transition: 'margin-left 0.2s',
+        background: colorBgLayout,
+      }}>
         <Header 
           style={{ 
-            padding: 0, 
+            padding: '0 24px', 
             background: colorBgContainer,
             position: 'sticky',
             top: 0,
             zIndex: 1,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+            boxShadow: themeMode === 'dark' 
+              ? '0 2px 8px rgba(0,0,0,0.3)' 
+              : '0 2px 8px rgba(0,0,0,0.1)',
+            borderBottom: `1px solid ${colorBorderSecondary}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
           }}
         >
           <div style={{ 
-            padding: '0 24px',
             fontSize: 18,
             fontWeight: 'bold',
             color: '#1890ff'
           }}>
             AI智能自动化测试平台
           </div>
+          <Space>
+            <Button
+              type="text"
+              icon={themeMode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              style={{
+                fontSize: 18,
+                width: 40,
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title={themeMode === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}
+            />
+          </Space>
         </Header>
         <Content
           style={{

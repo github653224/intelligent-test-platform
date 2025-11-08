@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Button, Card, Divider, Form, Input, Modal, Select, Space, Table, Tag, Typography, message, Popconfirm, Checkbox, Progress, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons';
 import { listTestCases, createTestCase, updateTestCase, deleteTestCase, listProjects, listRequirements, generateTestCasesStream } from '../services/aiService';
@@ -32,11 +33,14 @@ interface Requirement {
 }
 
 const TestCases: React.FC = () => {
+  const location = useLocation();
   const [items, setItems] = useState<TestCase[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const isMountedRef = useRef(true);
+  const isCurrentRouteRef = useRef(false);
   const [editing, setEditing] = useState<TestCase | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>(undefined);
   const [form] = Form.useForm();
@@ -71,25 +75,80 @@ const TestCases: React.FC = () => {
     }
   }, []);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  const fetchData = useCallback(async (showLoading: boolean = true) => {
+    // 首先检查是否是当前路由 - 必须在最前面检查
+    const isCurrentRoute = location.pathname === '/test-cases';
+    if (!isCurrentRoute) {
+      console.log('[TestCases] 不是当前路由，不加载数据', { pathname: location.pathname });
+      if (showLoading) {
+        setLoading(false);
+      }
+      return;
+    }
+    
+    console.log('[TestCases] 开始加载数据', { isMounted: isMountedRef.current, isCurrentRoute: isCurrentRouteRef.current, pathname: location.pathname });
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
       const params = selectedProjectId ? { project_id: selectedProjectId } : undefined;
       const data = await listTestCases(params);
-      setItems(Array.isArray(data) ? data : []);
+      const newItems = Array.isArray(data) ? data : [];
+      // 检查路由（异步操作后）
+      if (location.pathname !== '/test-cases') {
+        console.warn('[TestCases] 不在测试用例页面，不更新状态');
+        if (showLoading) {
+          setLoading(false);
+        }
+        return;
+      }
+      // 如果新数据为空，但之前有数据，保留旧数据（防止数据丢失）
+      setItems(prev => {
+        if (location.pathname !== '/test-cases') {
+          return prev;
+        }
+        if (newItems.length === 0 && prev.length > 0) {
+          console.warn('[数据加载] 后端返回空数组，保留现有数据');
+          return prev;
+        }
+        return newItems;
+      });
     } catch (e: any) {
+      // 如果是AbortError，说明请求被取消，不显示错误
+      if (e.name === 'AbortError' || e.name === 'CanceledError') {
+        // 请求被取消，直接清除loading
+        if (showLoading) {
+          setLoading(false);
+        }
+        return;
+      }
       // 如果是 404 或空数据，静默处理，显示空列表
       if (e?.response?.status === 404 || e?.response?.status === 200) {
-        setItems([]);
+        // 404 或空数据时，如果之前有数据，保留旧数据
+        if (isMountedRef.current && isCurrentRouteRef.current) {
+          setItems(prev => {
+            if (prev.length > 0) {
+              console.warn('[数据加载] 请求返回空，保留现有数据');
+              return prev;
+            }
+            return [];
+          });
+        }
       } else {
         // 只有真正的错误才显示提示
         console.error('加载测试用例失败:', e);
-        // 不显示错误消息，避免在没有数据时显示错误提示
+      }
+      // 无论什么情况，都要清除loading（不依赖路由检查）
+      if (showLoading) {
+        setLoading(false);
       }
     } finally {
-      setLoading(false);
+      // 确保loading被清除（双重保险）
+      if (showLoading) {
+        setLoading(false);
+      }
     }
-  }, [selectedProjectId]);
+  }, [selectedProjectId, location.pathname]);
 
   useEffect(() => {
     fetchProjects();
@@ -99,9 +158,39 @@ const TestCases: React.FC = () => {
     fetchRequirements(selectedProjectId);
   }, [selectedProjectId, fetchRequirements]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  // 监听路由变化 - 使用 useLayoutEffect 确保在渲染前执行
+  useLayoutEffect(() => {
+    const isTestCasesRoute = location.pathname === '/test-cases';
+    const wasCurrentRoute = isCurrentRouteRef.current;
+    isCurrentRouteRef.current = isTestCasesRoute;
+
+    console.log('[TestCases] 路由变化', { pathname: location.pathname, isCurrentRoute: isTestCasesRoute, wasCurrentRoute });
+
+    if (!isTestCasesRoute) {
+      // 不是当前路由，立即停止所有操作（必须在渲染前清除）
+      console.log('[TestCases] 离开当前路由，立即清除状态');
+      isMountedRef.current = false;
+      setLoading(false); // 强制清除loading，无论之前是否在当前路由
+      return;
+    }
+
+    // 是当前路由，确保标记已设置
+    isMountedRef.current = true;
+
+    // 首次进入页面时加载数据（只在之前不在当前路由时）
+    if (!wasCurrentRoute) {
+      console.log('[TestCases] 首次进入测试用例页面，加载数据');
+      // 延迟执行，确保状态已设置
+      setTimeout(() => {
+        if (location.pathname === '/test-cases' && isMountedRef.current && isCurrentRouteRef.current) {
+          fetchData(true);
+        }
+      }, 0);
+    }
+  }, [location.pathname, fetchData]);
+
+  // 注意：不再使用 useEffect 自动加载数据，只在 useLayoutEffect 中处理
+  // 这样可以避免重复调用和 loading 状态异常
 
   // 监听项目选择变化，更新需求列表和表单
   const handleProjectChange = (projectId: number | undefined) => {
@@ -462,7 +551,13 @@ const TestCases: React.FC = () => {
         <Space style={{ marginBottom: 16 }}>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建用例</Button>
           <Button type="primary" icon={<RobotOutlined />} onClick={() => setAiModalOpen(true)} style={{ background: '#722ed1', borderColor: '#722ed1' }}>AI生成用例</Button>
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => {
+            // 强制清除loading状态，然后刷新
+            setLoading(false);
+            if (location.pathname === '/test-cases') {
+              fetchData(true);
+            }
+          }} loading={loading && location.pathname === '/test-cases'}>刷新</Button>
           <Select
             placeholder="筛选项目"
             allowClear

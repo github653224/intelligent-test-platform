@@ -1,12 +1,14 @@
 """测试分析API - AI驱动的测试报告汇总分析"""
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from datetime import datetime, timedelta
 import httpx
 import logging
 import json
+import ast
 
 from app.db.session import get_db
 from app.models.project import TestRun, TestCase, Project
@@ -15,6 +17,140 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 AI_ENGINE_URL = "http://localhost:8001"
+
+
+@router.get("/test-runs/analyze-summary-stream")
+async def analyze_test_summary_stream(
+    request: Request,
+    days: int = 30,
+    project_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    AI分析测试报告汇总（流式输出）
+    """
+    async def generate():
+        try:
+            # 1. 收集测试数据
+            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            
+            query = db.query(TestRun)
+            if project_id:
+                query = query.filter(TestRun.project_id == project_id)
+            query = query.filter(TestRun.created_at >= cutoff_date)
+            
+            test_runs = query.order_by(TestRun.id.desc()).all()
+            
+            if not test_runs:
+                yield f"data: {json.dumps({'type': 'error', 'message': '暂无测试运行数据'}, ensure_ascii=False)}\n\n"
+                return
+            
+            # 2. 构建汇总数据
+            summary_data = {
+                "total_runs": len(test_runs),
+                "statistics": {
+                    "total_cases": 0,
+                    "passed_cases": 0,
+                    "failed_cases": 0,
+                    "skipped_cases": 0,
+                    "error_cases": 0,
+                },
+                "overall_pass_rate": 0.0,
+            }
+            
+            for tr in test_runs:
+                if tr.results and isinstance(tr.results, dict):
+                    total = tr.results.get("total_cases", 0) or 0
+                    passed = tr.results.get("passed_cases", 0) or 0
+                    failed = tr.results.get("failed_cases", 0) or 0
+                    skipped = tr.results.get("skipped_cases", 0) or 0
+                    error = tr.results.get("error_cases", 0) or 0
+                    
+                    summary_data["statistics"]["total_cases"] += total
+                    summary_data["statistics"]["passed_cases"] += passed
+                    summary_data["statistics"]["failed_cases"] += failed
+                    summary_data["statistics"]["skipped_cases"] += skipped
+                    summary_data["statistics"]["error_cases"] += error
+            
+            total = summary_data["statistics"]["total_cases"]
+            passed = summary_data["statistics"]["passed_cases"]
+            overall_pass_rate = (passed / total * 100) if total > 0 else 0
+            summary_data["overall_pass_rate"] = round(overall_pass_rate, 2)
+            
+            # 发送初始数据
+            yield f"data: {json.dumps({'type': 'summary', 'data': summary_data}, ensure_ascii=False)}\n\n"
+            
+            # 3. 调用AI引擎进行流式分析
+            try:
+                async with httpx.AsyncClient() as client:
+                    ai_prompt = f"""
+请分析以下测试执行汇总数据，并提供专业的测试洞察和建议：
+
+## 测试执行概况
+- 分析时间段：{days}天
+- 测试运行总数：{summary_data['total_runs']}次
+- 总测试用例数：{summary_data['statistics']['total_cases']}个
+- 通过用例：{summary_data['statistics']['passed_cases']}个
+- 失败用例：{summary_data['statistics']['failed_cases']}个
+- 跳过用例：{summary_data['statistics']['skipped_cases']}个
+- 错误用例：{summary_data['statistics']['error_cases']}个
+- 总体通过率：{summary_data['overall_pass_rate']}%
+
+请提供以下分析：
+1. **执行趋势分析**：分析测试执行的趋势和模式
+2. **质量评估**：评估整体测试质量，包括通过率、稳定性等
+3. **问题识别**：识别常见失败模式、高风险区域
+4. **改进建议**：提供具体的测试优化建议
+5. **风险预警**：识别潜在的质量风险点
+
+请以结构化的方式返回分析结果，包括关键指标、趋势、建议等。
+"""
+                    
+                    # 使用流式接口
+                    async with client.stream(
+                        "POST",
+                        f"{AI_ENGINE_URL}/api/analyze-requirement-stream",
+                        json={
+                            "requirement_text": ai_prompt,
+                            "project_context": f"测试执行汇总分析报告 - 分析最近{days}天的测试数据",
+                            "test_focus": ["测试质量", "失败模式", "改进建议"]
+                        },
+                        timeout=120.0
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk_bytes in response.aiter_bytes():
+                            if chunk_bytes:
+                                chunk_text = chunk_bytes.decode('utf-8', errors='ignore')
+                                # 处理SSE格式的数据
+                                for line in chunk_text.split('\n'):
+                                    line = line.strip()
+                                    if line.startswith('data: '):
+                                        content = line[6:].strip()
+                                        if content and content != '[DONE]':
+                                            # 如果内容已经是JSON，尝试解析
+                                            try:
+                                                parsed = json.loads(content)
+                                                if isinstance(parsed, dict) and 'content' in parsed:
+                                                    yield f"data: {json.dumps({'type': 'chunk', 'content': parsed['content']}, ensure_ascii=False)}\n\n"
+                                                else:
+                                                    yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                                            except json.JSONDecodeError:
+                                                # 如果不是JSON，直接作为文本内容
+                                                yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                                    elif line and not line.startswith(':'):
+                                        # 非SSE格式的直接文本
+                                        yield f"data: {json.dumps({'type': 'chunk', 'content': line}, ensure_ascii=False)}\n\n"
+                
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                logger.error(f"AI流式分析失败: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'AI分析服务暂时不可用: {str(e)}'}, ensure_ascii=False)}\n\n"
+                
+        except Exception as e:
+            logger.error(f"流式分析失败: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.get("/test-runs/analyze-summary")
@@ -200,11 +336,34 @@ async def analyze_test_summary(
                     # 提取分析内容 - AI引擎返回格式为 {"status": "success", "analysis": {...}}
                     if isinstance(ai_result, dict):
                         analysis_data = ai_result.get("analysis", {})
-                        if isinstance(analysis_data, dict):
+                        
+                        # 如果analysis_data是字符串，尝试解析为字典
+                        if isinstance(analysis_data, str):
+                            try:
+                                # 尝试使用ast.literal_eval解析Python字典字符串（安全）
+                                analysis_data = ast.literal_eval(analysis_data)
+                            except (ValueError, SyntaxError) as e:
+                                logger.warning(f"ast.literal_eval解析失败: {e}")
+                                try:
+                                    # 如果ast.literal_eval失败，尝试JSON解析（需要将单引号替换为双引号）
+                                    # 注意：这只能处理简单的JSON格式
+                                    json_str = analysis_data.replace("'", '"')
+                                    analysis_data = json.loads(json_str)
+                                except (json.JSONDecodeError, AttributeError) as e:
+                                    logger.warning(f"JSON解析也失败: {e}")
+                                    # 如果都失败，直接使用字符串
+                                    ai_analysis = analysis_data
+                                    analysis_data = None
+                        
+                        # 如果analysis_data是字典，格式化
+                        if analysis_data and isinstance(analysis_data, dict):
                             # 将结构化数据转换为Markdown格式
                             ai_analysis = _format_analysis_as_markdown(analysis_data)
-                        else:
+                        elif analysis_data:
                             ai_analysis = str(analysis_data) if analysis_data else "分析完成，但未返回详细内容"
+                        elif not isinstance(analysis_data, dict) and analysis_data is None:
+                            # 如果解析失败但没有设置ai_analysis，使用默认值
+                            ai_analysis = "分析完成，但无法解析详细内容"
                     else:
                         ai_analysis = str(ai_result)
                 except httpx.RequestError as e:

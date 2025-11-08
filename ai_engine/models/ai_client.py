@@ -36,17 +36,20 @@ class AIClient:
                 self.current_model = "deepseek"
                 self.current_model_name = "deepseek-chat"
 
-            # 测试Ollama是否可用
-            async def test_ollama():
+            # 测试Ollama是否可用（延迟测试，避免在已有事件循环中使用asyncio.run）
+            # 注意：在FastAPI环境中，已经有运行中的事件循环，不能使用asyncio.run()
+            # 这里只做标记，实际测试在首次使用时进行
+            try:
+                # 尝试同步检查（如果Ollama不可用会快速失败）
+                import requests
                 try:
-                    async with httpx.AsyncClient() as client:
-                        response = await client.get(f"{self.ollama_base_url}/api/version")
-                        return response.status_code == 200
+                    response = requests.get(f"{self.ollama_base_url}/api/version", timeout=1.0)
+                    if response.status_code == 200:
+                        logger.info("Ollama客户端可用")
                 except:
-                    return False
-
-            if asyncio.run(test_ollama()):
-                logger.info("Ollama客户端初始化成功")
+                    logger.debug("Ollama服务不可用（这是正常的，如果使用Deepseek）")
+            except Exception as e:
+                logger.debug(f"Ollama检查跳过: {e}")
             
             logger.info(f"AI客户端初始化完成，当前使用模型: {self.current_model}")
                 

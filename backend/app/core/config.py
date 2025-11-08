@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
-    SECRET_KEY: str = "sk-b6727208d0f14780b401102772df335e"
+    SECRET_KEY: str = "change-this-secret-key-in-production"  # 应该从环境变量读取
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
     
     # 更新CORS配置
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # AI模型配置
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4"
-    DEEPSEEK_API_KEY: Optional[str] = "sk-b6727208d0f14780b401102772df335e"  # 添加你的 Deepseek API key
+    DEEPSEEK_API_KEY: Optional[str] = None  # 应该从环境变量读取
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"  # 设置为你想使用的 Deepseek 模型
     OLLAMA_BASE_URL: str = "http://localhost:11434"

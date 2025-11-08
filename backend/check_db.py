@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.db.session import engine, SessionLocal
 from app.models.base import Base
 from app.models.project import Project, Requirement, TestCase, TestStep, TestSuite, TestRun
+from app.models.performance_test import PerformanceTest
 from sqlalchemy import inspect
 
 def check_database():
@@ -22,7 +23,7 @@ def check_database():
         tables = inspector.get_table_names()
         print(f"\n📊 数据库中的表: {tables}")
         
-        required_tables = ['projects', 'requirements', 'test_cases', 'test_steps', 'test_suites', 'test_runs']
+        required_tables = ['projects', 'requirements', 'test_cases', 'test_steps', 'test_suites', 'test_runs', 'performance_tests']
         missing_tables = [t for t in required_tables if t not in tables]
         
         if missing_tables:

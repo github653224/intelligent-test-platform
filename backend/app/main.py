@@ -6,7 +6,14 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from contextlib import asynccontextmanager
 import os
+import sys
 import traceback
+
+# 添加项目根目录到 Python 路径，以便导入 ai_engine
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(backend_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from app.api.v1.api import api_router
 from app.core.config import settings

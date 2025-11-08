@@ -95,7 +95,7 @@ ai_test_agent/
 
 1. **克隆项目**
 ```bash
-git clone https://github.com/your-username/ai_test_agent.git
+git clone https://github.com/github653224/intelligent-test-platform.git
 cd ai_test_agent
 ```
 
@@ -130,7 +130,7 @@ docker-compose up -d
 
 1. **克隆项目**
 ```bash
-git clone https://github.com/your-username/ai_test_agent.git
+git clone https://github.com/github653224/intelligent-test-platform.git
 cd ai_test_agent
 ```
 
@@ -447,9 +447,9 @@ python test_ai_engine.py
 
 ## 📞 支持
 
-- 📧 提交 Issue: [GitHub Issues](https://github.com/your-username/ai_test_agent/issues)
-- 📖 查看文档: [项目文档](https://github.com/your-username/ai_test_agent/wiki)
-- 💬 讨论: [GitHub Discussions](https://github.com/your-username/ai_test_agent/discussions)
+- 📧 提交 Issue: [GitHub Issues](https://github.com/github653224/intelligent-test-platform/issues)
+- 📖 查看文档: [项目文档](https://github.com/github653224/intelligent-test-platform/wiki)
+- 💬 讨论: [GitHub Discussions](https://github.com/github653224/intelligent-test-platform/discussions)
 
 ---
 

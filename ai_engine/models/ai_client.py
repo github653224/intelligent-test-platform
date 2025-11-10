@@ -128,16 +128,25 @@ class AIClient:
     ) -> str:
         """使用OpenAI生成响应"""
         try:
-            response = await self.openai_client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。"},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=max_tokens,
-                temperature=temperature
+            import asyncio
+            # 对于长文本生成，使用更长的超时时间
+            timeout_seconds = 120 if max_tokens > 2000 else 60
+            response = await asyncio.wait_for(
+                self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                ),
+                timeout=timeout_seconds
             )
             return response.choices[0].message.content
+        except asyncio.TimeoutError:
+            logger.error(f"OpenAI响应超时（超过{timeout_seconds}秒）")
+            raise Exception(f"AI响应超时，请稍后重试或减少请求内容")
         except Exception as e:
             logger.error(f"OpenAI响应生成失败: {e}")
             raise
@@ -151,16 +160,25 @@ class AIClient:
     ) -> str:
         """使用Deepseek生成响应"""
         try:
-            response = await self.deepseek_client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请严格按照用户要求的JSON格式返回结果，不要添加任何解释性文字，只返回可解析的JSON对象。"},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=max_tokens,
-                temperature=temperature
+            import asyncio
+            # 对于长文本生成，使用更长的超时时间
+            timeout_seconds = 120 if max_tokens > 2000 else 60
+            response = await asyncio.wait_for(
+                self.deepseek_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的软件测试专家，擅长需求分析、测试用例设计和自动化测试。请严格按照用户要求的JSON格式返回结果，不要添加任何解释性文字，只返回可解析的JSON对象。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                ),
+                timeout=timeout_seconds
             )
             return response.choices[0].message.content
+        except asyncio.TimeoutError:
+            logger.error(f"Deepseek响应超时（超过{timeout_seconds}秒）")
+            raise Exception(f"AI响应超时，请稍后重试或减少请求内容")
         except Exception as e:
             logger.error(f"Deepseek响应生成失败: {e}")
             raise
@@ -174,6 +192,8 @@ class AIClient:
     ) -> str:
         """使用Ollama生成响应"""
         try:
+            # 对于长文本生成，使用更长的超时时间
+            timeout_seconds = 120.0 if max_tokens > 2000 else 60.0
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.ollama_base_url}/api/chat",
@@ -186,11 +206,14 @@ class AIClient:
                             "temperature": temperature
                         }
                     },
-                    timeout=60.0
+                    timeout=timeout_seconds
                 )
                 response.raise_for_status()
                 result = response.json()
                 return result.get("response", "")
+        except httpx.TimeoutException:
+            logger.error(f"Ollama响应超时（超过{timeout_seconds}秒）")
+            raise Exception(f"AI响应超时，请稍后重试或减少请求内容")
         except Exception as e:
             logger.error(f"Ollama响应生成失败: {e}")
             raise

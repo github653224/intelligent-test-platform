@@ -52,7 +52,8 @@ class K6TestGenerator:
         self,
         test_description: str,
         target_url: str = None,
-        load_config: Dict[str, Any] = None
+        load_config: Dict[str, Any] = None,
+        generation_mode: str = "regex"
     ) -> Dict[str, Any]:
         """
         生成 k6 性能测试脚本
@@ -61,68 +62,133 @@ class K6TestGenerator:
             test_description: 测试描述（一句话描述性能测试需求）
             target_url: 目标 URL（可选）
             load_config: 负载配置（可选，包含 VUs、duration 等）
+            generation_mode: 生成模式，'ai' 或 'regex'，默认 'regex'
         """
+        logger.info(f"[K6生成] ========== 开始生成k6脚本 ==========")
+        logger.info(f"[K6生成] 生成模式: {generation_mode}")
+        logger.info(f"[K6生成] 原始测试描述: {test_description}")
+        
+        # 根据生成模式选择不同的生成方法
+        if generation_mode == "ai":
+            return await self._generate_by_ai_direct(test_description)
+        else:
+            return await self._generate_by_regex(test_description, target_url, load_config)
+    
+    async def _generate_by_ai_direct(self, test_description: str) -> Dict[str, Any]:
+        """AI直接生成模式：直接将需求给AI，要求只返回脚本代码"""
+        logger.info(f"[K6生成-AI模式] 使用AI直接生成模式")
+        
+        # 构建简洁的提示词，要求只返回脚本代码
+        prompt = self._build_ai_direct_prompt(test_description)
+        logger.info(f"[K6生成-AI模式] 提示词长度: {len(prompt)}")
+        logger.debug(f"[K6生成-AI模式] 提示词内容:\n{prompt}")
+        
+        try:
+            # 调用 AI 生成 k6 脚本，使用较低的温度以获得更稳定的输出
+            logger.info(f"[K6生成-AI模式] 开始调用AI生成脚本，temperature=0.2")
+            response = await self.ai_client.generate_response(prompt, temperature=0.2, max_tokens=3000)
+            logger.info(f"[K6生成-AI模式] AI响应长度: {len(response)}")
+            logger.debug(f"[K6生成-AI模式] AI响应内容（前500字符）: {response[:500]}")
+            
+            # 提取脚本代码（去掉markdown标记和说明文字）
+            k6_script = self._extract_script_from_response(response, test_description)
+            
+            if k6_script.get('status') == 'success':
+                logger.info(f"[K6生成-AI模式] ✅ 脚本生成成功，长度: {k6_script.get('script_length', 0)}")
+                # 清理脚本，移除重复定义的内置指标
+                original_script = k6_script.get('script', '')
+                cleaned_script = self._clean_k6_script(original_script)
+                if cleaned_script != original_script:
+                    logger.info(f"[K6生成-AI模式] 脚本已清理，移除了重复定义的内置指标")
+                    k6_script['script'] = cleaned_script
+                    k6_script['script_length'] = len(cleaned_script)
+                # 验证脚本有效性
+                if not self._validate_k6_script(k6_script.get('script', '')):
+                    logger.warning(f"[K6生成-AI模式] ⚠️ 生成的脚本可能无效")
+            else:
+                logger.error(f"[K6生成-AI模式] ❌ 脚本生成失败: {k6_script.get('error')}")
+            
+            return k6_script
+            
+        except Exception as e:
+            logger.error(f"[K6生成-AI模式] 生成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "error": str(e),
+                "test_description": test_description
+            }
+    
+    async def _generate_by_regex(self, test_description: str, target_url: str = None, load_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """正则匹配生成模式：使用正则提取参数，然后生成标准脚本"""
         original_description = test_description
         test_description = self._clean_requirement_text(test_description)
-        logger.info(f"[K6生成] ========== 开始生成k6脚本 ==========")
-        logger.info(f"[K6生成] 原始测试描述: {original_description}")
-        logger.info(f"[K6生成] 清理后的描述: {test_description}")
+        logger.info(f"[K6生成-正则模式] 原始测试描述: {original_description}")
+        logger.info(f"[K6生成-正则模式] 清理后的描述: {test_description}")
         
         if load_config is None:
             load_config = {}
-        logger.info(f"[K6生成] 传入的load_config: {load_config}")
-        logger.info(f"[K6生成] 传入的target_url: {target_url}")
+        logger.info(f"[K6生成-正则模式] 传入的load_config: {load_config}")
+        logger.info(f"[K6生成-正则模式] 传入的target_url: {target_url}")
         
         # 先用正则表达式提取参数
         extracted_params = self._extract_parameters_from_description(test_description)
-        logger.info(f"[K6生成] 正则提取的参数: {extracted_params}")
+        logger.info(f"[K6生成-正则模式] 正则提取的参数: {extracted_params}")
         
         # 如果正则提取不完整，使用 AI 补充提取
         if not extracted_params.get("vus") or not extracted_params.get("duration"):
-            logger.warning(f"[K6生成] ⚠️ 正则提取参数不完整，使用 AI 补充提取")
+            logger.warning(f"[K6生成-正则模式] ⚠️ 正则提取参数不完整，使用 AI 补充提取")
             ai_extracted = await self._extract_parameters_with_ai(test_description)
-            logger.info(f"[K6生成] AI提取的参数: {ai_extracted}")
+            logger.info(f"[K6生成-正则模式] AI提取的参数: {ai_extracted}")
             # 合并结果，AI 提取的优先级更高
             extracted_params = {**extracted_params, **ai_extracted}
-            logger.info(f"[K6生成] 合并后的参数: {extracted_params}")
+            logger.info(f"[K6生成-正则模式] 合并后的参数: {extracted_params}")
         else:
-            logger.info(f"[K6生成] ✅ 正则提取完整，无需AI补充")
+            logger.info(f"[K6生成-正则模式] ✅ 正则提取完整，无需AI补充")
         
         # 构建生成提示词（传入提取的参数）
         prompt = self._build_generation_prompt(test_description, target_url, load_config, extracted_params)
-        logger.info(f"[K6生成] 生成的提示词长度: {len(prompt)}")
-        logger.debug(f"[K6生成] 提示词内容（前1000字符）:\n{prompt[:1000]}")
+        logger.info(f"[K6生成-正则模式] 生成的提示词长度: {len(prompt)}")
+        logger.debug(f"[K6生成-正则模式] 提示词内容（前1000字符）:\n{prompt[:1000]}")
         
         try:
             # 调用 AI 生成 k6 脚本
-            logger.info(f"[K6生成] 开始调用AI生成脚本，temperature=0.3")
+            logger.info(f"[K6生成-正则模式] 开始调用AI生成脚本，temperature=0.3")
             response = await self.ai_client.generate_response(prompt, temperature=0.3)
-            logger.info(f"[K6生成] AI响应长度: {len(response)}")
-            logger.debug(f"[K6生成] AI响应内容（前500字符）: {response[:500]}")
+            logger.info(f"[K6生成-正则模式] AI响应长度: {len(response)}")
+            logger.debug(f"[K6生成-正则模式] AI响应内容（前500字符）: {response[:500]}")
             
             # 计算 final_vus 用于日志检查（从提取的参数或 load_config 获取）
             check_vus = extracted_params.get("vus") or (load_config.get("vus") if load_config else None) or 10
             
             # 解析生成的 k6 脚本
             k6_script = self._parse_k6_script_response(response, test_description)
-            logger.info(f"[K6生成] 解析后的脚本状态: {k6_script.get('status')}")
+            logger.info(f"[K6生成-正则模式] 解析后的脚本状态: {k6_script.get('status')}")
             if k6_script.get('status') == 'success':
-                logger.info(f"[K6生成] 生成的脚本长度: {k6_script.get('script_length', 0)}")
+                logger.info(f"[K6生成-正则模式] 生成的脚本长度: {k6_script.get('script_length', 0)}")
+                # 清理脚本，移除重复定义的内置指标
+                original_script = k6_script.get('script', '')
+                cleaned_script = self._clean_k6_script(original_script)
+                if cleaned_script != original_script:
+                    logger.info(f"[K6生成-正则模式] 脚本已清理，移除了重复定义的内置指标")
+                    k6_script['script'] = cleaned_script
+                    k6_script['script_length'] = len(cleaned_script)
                 # 检查脚本中是否包含正确的参数
                 script_content = k6_script.get('script', '')
                 # 检查是否错误地包含了vusMax字段（k6不支持此字段）
                 if 'vusMax' in script_content:
-                    logger.warning(f"[K6生成] ⚠️ 脚本中包含 vusMax 字段（k6不支持此字段，应移除）")
+                    logger.warning(f"[K6生成-正则模式] ⚠️ 脚本中包含 vusMax 字段（k6不支持此字段，应移除）")
                 # 检查stages配置是否正确
                 if f'target: {check_vus}' in script_content:
-                    logger.info(f"[K6生成] ✅ 脚本中包含正确的 target: {check_vus}")
+                    logger.info(f"[K6生成-正则模式] ✅ 脚本中包含正确的 target: {check_vus}")
                 elif 'target: 10' in script_content:
-                    logger.warning(f"[K6生成] ⚠️ 脚本中包含 target: 10（可能使用了默认值，应该是 {check_vus}）")
+                    logger.warning(f"[K6生成-正则模式] ⚠️ 脚本中包含 target: 10（可能使用了默认值，应该是 {check_vus}）")
             
             return k6_script
             
         except Exception as e:
-            logger.error(f"k6 脚本生成失败: {e}")
+            logger.error(f"[K6生成-正则模式] 生成失败: {e}")
             return {
                 "status": "error",
                 "error": str(e),
@@ -562,5 +628,261 @@ export default function() {{
         found_keywords = sum(1 for keyword in k6_keywords if keyword in script)
         
         # 至少应该包含 2 个关键词
-        return found_keywords >= 2
+        if found_keywords < 2:
+            return False
+        
+        # 检查是否重复定义了内置指标
+        import re
+        builtin_metrics = ['data_sent', 'data_received', 'http_req_duration', 'http_reqs', 'iterations', 'vus']
+        for metric in builtin_metrics:
+            # 检查是否使用 new Counter/Trend/Rate/Gauge 创建了内置指标
+            patterns = [
+                rf"new\s+Counter\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                rf"new\s+Trend\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                rf"new\s+Rate\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                rf"new\s+Gauge\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                rf"new\s+Metric\s*\(\s*['\"]{re.escape(metric)}['\"]",
+            ]
+            for pattern in patterns:
+                if re.search(pattern, script, re.IGNORECASE):
+                    logger.warning(f"[脚本验证] 检测到重复定义的内置指标: {metric}")
+                    # 不阻止，但记录警告（因为执行时会自动清理）
+        
+        return True
+    
+    def _clean_k6_script(self, script: str) -> str:
+        """
+        清理k6脚本，移除重复定义的内置指标及其使用
+        
+        Args:
+            script: 原始脚本内容
+            
+        Returns:
+            清理后的脚本内容
+        """
+        import re
+        
+        # k6内置指标列表
+        builtin_metrics = [
+            'data_sent', 'data_received', 'http_req_duration', 'http_reqs',
+            'iterations', 'vus', 'http_req_failed', 'http_req_waiting',
+            'http_req_connecting', 'http_req_tls_handshaking', 'http_req_sending',
+            'http_req_receiving', 'http_req_blocked', 'iteration_duration',
+            'vus_max'
+        ]
+        
+        lines = script.split('\n')
+        cleaned_lines = []
+        
+        # 跟踪需要移除的变量名
+        variables_to_remove = set()
+        
+        # 第一遍：找出所有定义内置指标的变量
+        for line in lines:
+            for metric in builtin_metrics:
+                # 匹配 const/let/var variableName = new Counter('data_sent')
+                pattern = rf"(const|let|var)\s+(\w+)\s*=\s*new\s+(Counter|Trend|Rate|Gauge|Metric)\s*\(\s*['\"]{re.escape(metric)}['\"]"
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    var_name = match.group(2)
+                    variables_to_remove.add(var_name)
+                    logger.warning(f"[脚本清理] 检测到重复定义的内置指标: {metric} (变量名: {var_name})")
+        
+        # 第二遍：移除定义行和使用这些变量的代码行
+        for line in lines:
+            should_skip = False
+            
+            # 检查是否是定义内置指标的变量
+            for metric in builtin_metrics:
+                patterns = [
+                    rf"(const|let|var)\s+\w+\s*=\s*new\s+(Counter|Trend|Rate|Gauge|Metric)\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                    rf"new\s+Counter\s*\(\s*['\"]{re.escape(metric)}['\"]\s*\)",
+                    rf"new\s+Trend\s*\(\s*['\"]{re.escape(metric)}['\"]\s*\)",
+                    rf"new\s+Rate\s*\(\s*['\"]{re.escape(metric)}['\"]\s*\)",
+                    rf"new\s+Gauge\s*\(\s*['\"]{re.escape(metric)}['\"]\s*\)",
+                    rf"new\s+Metric\s*\(\s*['\"]{re.escape(metric)}['\"]",
+                ]
+                
+                for pattern in patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        should_skip = True
+                        break
+                
+                if should_skip:
+                    break
+            
+            # 检查是否使用了需要移除的变量
+            if not should_skip and variables_to_remove:
+                for var_name in variables_to_remove:
+                    if re.search(rf"\b{re.escape(var_name)}\s*\.", line):
+                        logger.warning(f"[脚本清理] 移除变量使用: {var_name}")
+                        should_skip = True
+                        break
+            
+            if not should_skip:
+                cleaned_lines.append(line)
+        
+        cleaned_script = '\n'.join(cleaned_lines)
+        
+        if cleaned_script != script:
+            logger.info(f"[脚本清理] 脚本已清理，移除了 {len(variables_to_remove)} 个变量的定义和使用")
+            if variables_to_remove:
+                logger.info(f"[脚本清理] 移除的变量: {', '.join(variables_to_remove)}")
+        
+        return cleaned_script
+    
+    def _build_ai_direct_prompt(self, test_description: str) -> str:
+        """构建AI直接生成模式的提示词"""
+        prompt = f"""你是一个专业的性能测试工程师，擅长使用 k6 进行性能测试。
+
+请根据以下需求生成一个增强版的 k6 性能测试脚本：
+
+## 测试需求
+{test_description}
+
+## 要求
+1. **只返回 k6 JavaScript 代码，不要任何解释、说明或 markdown 标记**
+2. **脚本必须是增强版本，包含更多监控指标**：
+   - 响应时间分布（p50, p95, p99, p100）
+   - 吞吐量（RPS）
+   - 错误率
+   - 数据发送/接收量
+   - 迭代次数
+3. **代码应该可以直接保存为 .js 文件并运行**
+4. **不要使用 ```javascript 或 ``` 包裹代码**
+5. **不要添加任何注释说明功能**
+6. **脚本必须包含完整的 options 配置和 default function**
+7. **重要：不要手动创建 k6 内置指标**：
+   - k6 已经内置了以下指标，**不要使用 new Metric() 或 Counter/Rate/Trend/Gauge 创建这些指标**：
+     - `data_sent` - 发送的数据量（自动统计）
+     - `data_received` - 接收的数据量（自动统计）
+     - `http_req_duration` - HTTP请求持续时间（自动统计）
+     - `http_reqs` - HTTP请求总数（自动统计）
+     - `iterations` - 迭代次数（自动统计）
+     - `vus` - 虚拟用户数（自动统计）
+   - **只使用 thresholds 配置来监控这些内置指标，不要重新定义它们**
+
+## 脚本要求
+- 使用 k6 的标准语法
+- 包含 stages 配置（如果需要渐进式加压）
+- 包含 thresholds 配置（性能阈值）- 使用内置指标名称，如 `http_req_duration`, `http_reqs`, `data_sent`, `data_received` 等
+- **不要使用 new Trend(), new Counter(), new Rate(), new Gauge() 创建 k6 内置指标**
+- 使用 check() 函数验证响应
+- 添加适当的 sleep() 模拟用户行为
+- 使用 k6 内置的 http 模块和指标，不要重复定义
+
+## 输出格式
+直接输出代码，不要任何其他文字。代码应该以 import 语句开始，以 export default function 结束。
+
+直接输出代码："""
+        return prompt
+    
+    def _extract_script_from_response(self, response: str, test_description: str = "") -> Dict[str, Any]:
+        """从AI响应中提取脚本代码，去掉markdown标记和说明文字"""
+        try:
+            # 清理响应文本
+            cleaned_response = response.strip()
+            
+            # 1. 尝试提取 markdown 代码块
+            code_block_patterns = [
+                r'```javascript\s*\n(.*?)\n```',  # ```javascript ... ```
+                r'```js\s*\n(.*?)\n```',          # ```js ... ```
+                r'```\s*\n(.*?)\n```',            # ``` ... ```
+            ]
+            
+            for pattern in code_block_patterns:
+                match = re.search(pattern, cleaned_response, re.DOTALL)
+                if match:
+                    cleaned_response = match.group(1).strip()
+                    logger.info(f"[脚本提取] 从 markdown 代码块中提取脚本（模式: {pattern[:20]}...）")
+                    break
+            
+            # 2. 如果响应中包含代码块标记但没有匹配到，尝试更宽松的匹配
+            if "```" in cleaned_response and not cleaned_response.strip().startswith("import"):
+                # 尝试提取最后一个代码块
+                code_blocks = re.findall(r'```(?:javascript|js)?\s*\n(.*?)\n```', cleaned_response, re.DOTALL)
+                if code_blocks:
+                    cleaned_response = code_blocks[-1].strip()
+                    logger.info(f"[脚本提取] 从最后一个代码块中提取脚本")
+            
+            # 3. 清理可能的前置说明文字
+            # 如果响应以非代码内容开始，尝试找到第一个 import 或 export
+            if not cleaned_response.strip().startswith("import") and not cleaned_response.strip().startswith("export"):
+                # 查找第一个 import 或 export 语句的位置
+                import_match = re.search(r'(import\s+.*?from)', cleaned_response, re.DOTALL)
+                export_match = re.search(r'(export\s+.*?options)', cleaned_response, re.DOTALL)
+                
+                if import_match:
+                    start_pos = import_match.start()
+                    cleaned_response = cleaned_response[start_pos:].strip()
+                    logger.info(f"[脚本提取] 从第一个 import 语句开始提取")
+                elif export_match:
+                    start_pos = export_match.start()
+                    cleaned_response = cleaned_response[start_pos:].strip()
+                    logger.info(f"[脚本提取] 从第一个 export 语句开始提取")
+            
+            # 4. 清理后置说明文字
+            # 如果响应以非代码内容结束，尝试找到最后一个 }
+            if cleaned_response.count('}') > cleaned_response.count('{'):
+                # 可能有额外的说明文字，尝试找到最后一个完整的代码块
+                lines = cleaned_response.split('\n')
+                # 找到最后一个包含 export default function 或 } 的行
+                last_code_line = -1
+                for i in range(len(lines) - 1, -1, -1):
+                    line = lines[i].strip()
+                    if line and (line.startswith('}') or line.startswith('export') or line.startswith('import')):
+                        last_code_line = i
+                        break
+                
+                if last_code_line >= 0:
+                    cleaned_response = '\n'.join(lines[:last_code_line + 1]).strip()
+                    logger.info(f"[脚本提取] 清理后置说明文字")
+            
+            # 5. 移除可能的行内注释说明（保留代码注释）
+            # 这里只移除明显的非代码行，保留代码中的注释
+            
+            # 6. 最终清理：移除前后空白
+            cleaned_response = cleaned_response.strip()
+            
+            # 7. 验证提取的脚本
+            if not self._validate_k6_script(cleaned_response):
+                logger.warning(f"[脚本提取] ⚠️ 提取的脚本可能无效，尝试使用原始响应")
+                # 如果提取失败，尝试使用原始响应（去掉明显的说明文字）
+                original_cleaned = response.strip()
+                # 移除 markdown 标记
+                original_cleaned = re.sub(r'```(?:javascript|js)?\s*\n?', '', original_cleaned)
+                original_cleaned = re.sub(r'```\s*\n?', '', original_cleaned)
+                original_cleaned = original_cleaned.strip()
+                
+                # 如果原始响应看起来更像代码，使用它
+                if self._validate_k6_script(original_cleaned):
+                    cleaned_response = original_cleaned
+                    logger.info(f"[脚本提取] 使用清理后的原始响应")
+                else:
+                    logger.error(f"[脚本提取] ❌ 无法提取有效的脚本")
+                    return {
+                        "status": "error",
+                        "error": "无法从AI响应中提取有效的k6脚本",
+                        "test_description": test_description,
+                        "raw_response": response[:500] if response else ""
+                    }
+            
+            logger.info(f"[脚本提取] ✅ 脚本提取成功，长度: {len(cleaned_response)}")
+            return {
+                "status": "success",
+                "script": cleaned_response,
+                "test_description": test_description,
+                "script_length": len(cleaned_response)
+            }
+            
+        except Exception as e:
+            logger.error(f"[脚本提取] 提取失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "status": "error",
+                "error": f"脚本提取失败: {str(e)}",
+                "test_description": test_description,
+                "raw_response": response[:500] if response else ""
+            }
 

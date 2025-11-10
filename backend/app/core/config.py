@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # 测试配置
     SELENIUM_WEBDRIVER_PATH: Optional[str] = None
     PLAYWRIGHT_BROWSERS_PATH: Optional[str] = None
+    K6_BINARY_PATH: Optional[str] = None  # k6二进制文件路径，如果为None则自动查找
     
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"

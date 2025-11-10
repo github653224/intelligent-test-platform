@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import {
   Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography,
   App, Popconfirm, Descriptions, Drawer, Statistic, Row, Col,
-  Spin, Tabs, Divider, Alert, Switch
+  Spin, Tabs, Divider, Alert, Switch, Radio
 } from 'antd';
 import dayjs from 'dayjs';
 import ReactMarkdown from 'react-markdown';
@@ -52,11 +52,14 @@ const PerformanceTests: React.FC = () => {
   const [editedScript, setEditedScript] = useState<string>('');
   const [savingScript, setSavingScript] = useState(false);
   const [autoExecute, setAutoExecute] = useState(false); // 是否创建后自动执行
+  const [generationMode, setGenerationMode] = useState<string>('regex'); // 生成模式：'ai' 或 'regex'
   const fetchingRef = useRef(false); // 防止重复调用
   // 轻量级轮询：只轮询运行中的测试状态
   const pollingIntervalsRef = useRef<Map<number, NodeJS.Timeout>>(new Map()); // 每个测试ID对应一个轮询定时器
   const abortControllerRef = useRef<AbortController | null>(null); // 用于取消正在进行的请求
+  const createAbortControllerRef = useRef<AbortController | null>(null); // 用于取消创建测试的请求
   const startAnalysisPollingRef = useRef<((testId: number) => void) | null>(null); // 存储分析轮询函数引用
+  const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -138,21 +141,86 @@ const PerformanceTests: React.FC = () => {
           pollingIntervalsRef.current.delete(testId);
           console.log(`[PerformanceTests] 测试 ${testId} 执行完成，停止轮询`, { status: detail.status });
           
-          // 如果测试成功完成，检查是否需要启动分析轮询
-          if (detail.status === 'completed' && detail.results) {
+          // 如果测试成功完成，检查是否需要自动分析
+          if ((detail.status === 'completed' || detail.status === 'success') && detail.results) {
             // 检查是否已有分析结果
             if (!detail.analysis || !detail.analysis.markdown) {
-              // 如果还没有分析结果，启动分析轮询（后端可能正在自动分析）
-              console.log(`[PerformanceTests] 测试 ${testId} 执行完成，启动分析轮询`);
-              // 延迟一点启动，给后端一些时间生成分析
+              // 如果还没有分析结果，等待5秒后检查（给后端时间自动分析）
+              console.log(`[PerformanceTests] 测试 ${testId} 执行完成，等待后端自动分析...`);
+              
+              // 先启动分析轮询，等待后端自动分析结果
               setTimeout(() => {
                 if (isMountedRef.current && isCurrentRouteRef.current && location.pathname === '/performance-tests') {
-                  // 使用 ref 来调用，避免循环依赖
-                  if (startAnalysisPollingRef.current) {
-                    startAnalysisPollingRef.current(testId);
-                  }
+                  // 检查是否已有分析结果（后端可能在等待期间已经完成了分析）
+                  getPerformanceTest(testId).then((latestDetail) => {
+                    if (isMountedRef.current && isCurrentRouteRef.current) {
+                      // 更新详情
+                      setTestDetail(latestDetail);
+                      setItems(prev => prev.map(item => {
+                        if (item.id === testId) {
+                          return { ...item, ...latestDetail };
+                        }
+                        return item;
+                      }));
+                      
+                      // 如果后端已经自动分析完成，启动轮询等待结果更新
+                      if (latestDetail.analysis && latestDetail.analysis.markdown) {
+                        console.log(`[PerformanceTests] 测试 ${testId} 后端已自动完成分析`);
+                        // 不需要做任何事情，分析已完成
+                      } else {
+                        // 后端还没有分析完成，启动轮询等待
+                        console.log(`[PerformanceTests] 测试 ${testId} 后端尚未完成分析，启动分析轮询`);
+                        if (startAnalysisPollingRef.current) {
+                          startAnalysisPollingRef.current(testId);
+                        }
+                        
+                        // 再等待3秒，如果还没有分析结果，前端主动触发分析（备用方案）
+                        setTimeout(() => {
+                          if (isMountedRef.current && isCurrentRouteRef.current && location.pathname === '/performance-tests') {
+                            getPerformanceTest(testId).then((checkDetail) => {
+                              if (isMountedRef.current && isCurrentRouteRef.current) {
+                                // 再次检查是否已有分析结果
+                                if (!checkDetail.analysis || !checkDetail.analysis.markdown) {
+                                  // 检查是否正在分析中（避免重复触发）
+                                  // 使用最新的详情数据来检查，而不是从 items 状态中获取
+                                  if (!isAnalyzing(checkDetail)) {
+                                    console.log(`[PerformanceTests] 测试 ${testId} 后端未自动分析，前端主动触发分析（备用方案）`);
+                                    // 前端主动触发分析（作为备用方案）
+                                    // 注意：这里不显示加载消息，因为后端可能正在分析，前端只是作为备用
+                                    handleAnalyze(testId).catch((e) => {
+                                      console.error(`[PerformanceTests] 前端触发分析失败: ${testId}`, e);
+                                    });
+                                  } else {
+                                    console.log(`[PerformanceTests] 测试 ${testId} 正在分析中，不重复触发`);
+                                  }
+                                } else {
+                                  console.log(`[PerformanceTests] 测试 ${testId} 分析已完成，无需触发`);
+                                  // 更新列表和详情
+                                  setTestDetail(checkDetail);
+                                  setItems(prev => prev.map(item => {
+                                    if (item.id === testId) {
+                                      return { ...item, ...checkDetail };
+                                    }
+                                    return item;
+                                  }));
+                                }
+                              }
+                            }).catch((e) => {
+                              console.error(`[PerformanceTests] 检查分析状态失败: ${testId}`, e);
+                            });
+                          }
+                        }, 3000); // 再等待3秒，总共等待8秒
+                      }
+                    }
+                  }).catch((e) => {
+                    console.error(`[PerformanceTests] 获取最新详情失败: ${testId}`, e);
+                    // 如果获取失败，直接启动分析轮询
+                    if (startAnalysisPollingRef.current) {
+                      startAnalysisPollingRef.current(testId);
+                    }
+                  });
                 }
-              }, 2000); // 延迟2秒，给后端时间生成分析
+              }, 5000); // 等待5秒，给后端时间自动分析
             } else {
               console.log(`[PerformanceTests] 测试 ${testId} 已有分析结果，无需启动分析轮询`);
             }
@@ -230,15 +298,8 @@ const PerformanceTests: React.FC = () => {
       const params = selectedProjectId ? { project_id: selectedProjectId } : undefined;
       console.log('[PerformanceTests][fetchItems] 调用 API', { params });
       
-      // 添加超时处理
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('请求超时')), 8000); // 8秒超时
-      });
-      
-      const data = await Promise.race([
-        listPerformanceTests(params),
-        timeoutPromise
-      ]) as any;
+      // 直接调用API，使用服务中的超时设置
+      const data = await listPerformanceTests(params);
       
       console.log('[PerformanceTests][fetchItems] 数据加载成功', { dataLength: Array.isArray(data) ? data.length : 0, isMounted: isMountedRef.current });
       
@@ -328,11 +389,33 @@ const PerformanceTests: React.FC = () => {
         return;
       }
       
-      // 如果是AbortError或超时，说明请求被取消，不显示错误
-      if (e.name !== 'AbortError' && e.name !== 'CanceledError' && e.message !== '请求超时') {
-        if (isMountedRef.current && isCurrentRouteRef.current) {
-          message.error('加载性能测试列表失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+      // 如果是AbortError或取消，说明请求被取消，不显示错误
+      if (e.name === 'AbortError' || e.name === 'CanceledError' || e.code === 'ERR_CANCELED') {
+        console.log('[fetchItems] 请求被取消');
+        if (showLoading) {
+          setLoading(false);
         }
+        fetchingRef.current = false;
+        return;
+      }
+      
+      // 处理超时和连接错误
+      if (isMountedRef.current && isCurrentRouteRef.current) {
+        let errorMessage = '加载性能测试列表失败: ';
+        
+        if (e.code === 'ECONNABORTED' || e.message?.includes('timeout') || e.message?.includes('超时')) {
+          errorMessage += '请求超时。请检查后端服务是否正常运行，或稍后重试。';
+        } else if (e.code === 'ECONNREFUSED' || e.message?.includes('Network Error') || e.message?.includes('连接')) {
+          errorMessage += '无法连接到后端服务。请确认后端服务（http://localhost:8000）是否已启动。';
+        } else if (e.response?.status === 500) {
+          errorMessage += e.response?.data?.detail || '服务器内部错误。请检查后端日志。';
+        } else if (e.response?.status === 503) {
+          errorMessage += '服务暂时不可用。请稍后重试。';
+        } else {
+          errorMessage += e.response?.data?.detail || e.message || '未知错误';
+        }
+        
+        message.error(errorMessage, 5);
       }
       
       // 保留现有数据，不清空
@@ -452,6 +535,13 @@ const PerformanceTests: React.FC = () => {
         abortControllerRef.current = null;
       }
       
+      // 取消创建测试的请求
+      if (createAbortControllerRef.current) {
+        console.log('[PerformanceTests] 取消创建测试请求');
+        createAbortControllerRef.current.abort();
+        createAbortControllerRef.current = null;
+      }
+      
       // 清除所有轮询定时器
       pollingIntervalsRef.current.forEach((interval, testId) => {
         console.log(`[PerformanceTests] 清除测试 ${testId} 的轮询`);
@@ -462,6 +552,7 @@ const PerformanceTests: React.FC = () => {
       // 最后清除 loading（确保在所有异步操作之后）
       console.log('[PerformanceTests][useEffect] 组件卸载时强制清除全局 loading');
       setLoading(false);
+      setGeneratingScript(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
@@ -483,12 +574,26 @@ const PerformanceTests: React.FC = () => {
   }, [selectedProjectId]);
 
   const handleCreate = async () => {
+    // 创建 AbortController 用于取消请求
+    const abortController = new AbortController();
+    createAbortControllerRef.current = abortController;
+    
     try {
       const values = await form.validateFields();
       
       // 生成 k6 脚本
       setGeneratingScript(true);
-      message.loading({ content: 'AI 正在生成 k6 脚本...', key: 'generating' });
+      const loadingMessage = generationMode === 'ai' 
+        ? 'AI 正在生成增强版 k6 脚本（可能需要30-120秒，请耐心等待）...' 
+        : 'AI 正在生成 k6 脚本...';
+      message.loading({ content: loadingMessage, key: 'generating', duration: 0 });
+      
+      // 检查是否已取消
+      if (abortController.signal.aborted) {
+        message.destroy('generating');
+        setGeneratingScript(false);
+        return;
+      }
       
       const scriptResult = await generateK6Script({
         test_description: values.test_description,
@@ -497,58 +602,194 @@ const PerformanceTests: React.FC = () => {
           vus: values.load_config.vus || 10,
           duration: values.load_config.duration || '30s',
           stages: values.load_config.stages
-        } : undefined
-      });
+        } : undefined,
+        generation_mode: generationMode
+      }, abortController.signal);
+
+      // 检查是否已取消
+      if (abortController.signal.aborted) {
+        message.destroy('generating');
+        setGeneratingScript(false);
+        return;
+      }
 
       if (scriptResult.status !== 'success') {
         message.error({ content: `生成脚本失败: ${scriptResult.error}`, key: 'generating' });
         setGeneratingScript(false);
+        createAbortControllerRef.current = null;
         return;
       }
 
       message.success({ content: '脚本生成成功，正在创建测试...', key: 'generating' });
 
-      // 创建性能测试
+      // 检查是否已取消
+      if (abortController.signal.aborted) {
+        message.destroy('generating');
+        setGeneratingScript(false);
+        return;
+      }
+
+      // 创建性能测试（使用前端已生成的脚本，避免后端重复生成）
       const newTest = await createPerformanceTest({
         project_id: values.project_id,
         name: values.name,
         description: values.description,
         test_description: values.test_description,
         target_url: values.target_url,
-        load_config: values.load_config
-      });
+        load_config: values.load_config,
+        generation_mode: generationMode,
+        k6_script: scriptResult.script // 传递已生成的脚本
+      }, abortController.signal);
+
+      // 检查是否已取消
+      if (abortController.signal.aborted) {
+        message.destroy('generating');
+        setGeneratingScript(false);
+        return;
+      }
+
+      // 验证创建的测试是否有脚本
+      if (!newTest.k6_script || !newTest.k6_script.trim()) {
+        message.error({ 
+          content: '测试创建成功，但脚本为空，无法执行。请检查测试配置。', 
+          key: 'generating',
+          duration: 5 
+        });
+        setModalOpen(false);
+        form.resetFields();
+        setAutoExecute(false);
+        setGenerationMode('regex');
+        fetchItems(false);
+        return;
+      }
 
       message.success({ content: '性能测试创建成功', key: 'generating' });
       setModalOpen(false);
       form.resetFields();
+      const shouldAutoExecute = autoExecute; // 保存执行标志
+      setAutoExecute(false); // 重置自动执行开关
+      setGenerationMode('regex'); // 重置生成模式
+      
+      fetchItems(false); // 创建后刷新，不显示全局loading
       
       // 如果选择了自动执行，创建后立即执行
-      if (autoExecute) {
-        message.info({ content: '正在启动执行...', key: 'executing', duration: 2 });
-        try {
-          // 延迟一点执行，确保数据已刷新
+      if (shouldAutoExecute) {
+        // 等待数据刷新完成，然后执行
           setTimeout(async () => {
             try {
+            message.info({ 
+              content: '正在验证测试配置并启动执行...', 
+              key: 'executing', 
+              duration: 0  // 不自动关闭，等待执行结果
+            });
+            
+            // 重新获取测试详情，确保脚本已保存
+            let testDetail: PerformanceTest | null = null;
+            try {
+              testDetail = await getPerformanceTest(newTest.id);
+            } catch (e: any) {
+              message.error({ 
+                content: '获取测试详情失败: ' + (e.response?.data?.detail || e.message), 
+                key: 'executing',
+                duration: 5
+              });
+              return;
+            }
+            
+            // 检查 testDetail 是否存在
+            if (!testDetail) {
+              message.error({ 
+                content: '无法获取测试详情，请重新创建测试或检查测试配置。', 
+                key: 'executing',
+                duration: 5
+              });
+              return;
+            }
+            
+            // 再次验证脚本是否存在
+            if (!testDetail.k6_script || !testDetail.k6_script.trim()) {
+              message.error({ 
+                content: '测试脚本不存在或为空，无法执行。请重新创建测试或检查测试配置。', 
+                key: 'executing',
+                duration: 5
+              });
+              return;
+            }
+            
+            // 验证通过，执行测试
+            message.loading({ 
+              content: '脚本验证通过，正在启动执行...', 
+              key: 'executing',
+              duration: 0
+            });
+            
               await executePerformanceTest(newTest.id);
-              message.success({ content: '测试执行已启动', key: 'executing', duration: 3 });
+            message.destroy('executing');
+            message.success({ 
+              content: '测试执行已启动', 
+              key: 'execute-success',
+              duration: 3 
+            });
+            
               // 启动轮询
               if (isMountedRef.current && isCurrentRouteRef.current) {
                 startPolling(newTest.id);
               }
             } catch (e: any) {
-              message.error({ content: '启动执行失败: ' + (e.response?.data?.detail || e.message), key: 'executing' });
+            message.destroy('executing');
+            let errorDetail = '未知错误';
+            if (e.response?.data?.detail) {
+              errorDetail = typeof e.response.data.detail === 'string' 
+                ? e.response.data.detail 
+                : JSON.stringify(e.response.data.detail);
+            } else if (e.response?.data?.message) {
+              errorDetail = typeof e.response.data.message === 'string'
+                ? e.response.data.message
+                : JSON.stringify(e.response.data.message);
+            } else if (e.message) {
+              errorDetail = e.message;
             }
-          }, 500);
-        } catch (e: any) {
-          console.error('执行失败:', e);
+            message.error({ 
+              content: `启动执行失败: ${errorDetail}`, 
+              key: 'execute-error',
+              duration: 5
+            });
+            
+            // 如果是脚本相关的错误，提供更明确的提示
+            if (errorDetail.includes('脚本') || errorDetail.includes('script')) {
+              message.warning({
+                content: '提示：如果脚本生成失败，请检查AI服务是否正常运行，或尝试切换到正则匹配模式。',
+                duration: 5
+              });
         }
       }
-      
-      fetchItems(false); // 创建后刷新，不显示全局loading
+        }, 1000); // 增加延迟到1秒，确保数据库已提交
+      }
     } catch (e: any) {
+      // 如果是取消错误，不显示错误消息
+      if (e.name === 'AbortError' || e.name === 'CanceledError' || e.code === 'ERR_CANCELED') {
+        message.destroy('generating');
+        setGeneratingScript(false);
+        createAbortControllerRef.current = null;
+        return;
+      }
+      
+      // 关闭加载提示
+      message.destroy('generating');
+      
+      // 检查是否是超时错误
+      if (e.code === 'ECONNABORTED' || e.message?.includes('timeout') || e.message?.includes('超时')) {
+        const errorMsg = generationMode === 'ai' 
+          ? 'AI生成脚本超时（可能需要更长时间），请稍后重试或切换到正则匹配模式' 
+          : '生成脚本超时，请稍后重试';
+        message.error(errorMsg);
+      } else {
       message.error('创建失败: ' + (e.response?.data?.detail || e.message));
+      }
     } finally {
       setGeneratingScript(false);
+      createAbortControllerRef.current = null;
+      message.destroy('generating'); // 确保关闭加载提示
     }
   };
 
@@ -594,7 +835,10 @@ const PerformanceTests: React.FC = () => {
       message.info({ content: '测试执行已启动，正在后台运行...', key: `executing-${id}`, duration: 3 });
       
       // 调用后端接口，后端会立即返回更新后的性能测试对象（状态已更新为 running）
+      console.log(`[PerformanceTests] 开始执行性能测试: ID=${id}`);
       const updatedTest = await executePerformanceTest(id);
+      console.log(`[PerformanceTests] 执行请求完成，返回的测试对象:`, updatedTest);
+      console.log(`[PerformanceTests] 返回的测试状态: ${updatedTest.status}`);
       
       // 再次检查路由（异步操作后）
       if (location.pathname !== '/performance-tests' || !isMountedRef.current || !isCurrentRouteRef.current) {
@@ -635,7 +879,21 @@ const PerformanceTests: React.FC = () => {
           return item;
         });
       });
-      message.error({ content: '启动执行失败: ' + (e.response?.data?.detail || e.message), key: `executing-${id}` });
+      let errorMessage = '启动执行失败: ';
+      if (e.response?.data?.detail) {
+        errorMessage += typeof e.response.data.detail === 'string' 
+          ? e.response.data.detail 
+          : JSON.stringify(e.response.data.detail);
+      } else if (e.response?.data?.message) {
+        errorMessage += typeof e.response.data.message === 'string'
+          ? e.response.data.message
+          : JSON.stringify(e.response.data.message);
+      } else if (e.message) {
+        errorMessage += e.message;
+      } else {
+        errorMessage += '未知错误';
+      }
+      message.error({ content: errorMessage, key: `executing-${id}`, duration: 5 });
     }
   };
 
@@ -739,8 +997,8 @@ const PerformanceTests: React.FC = () => {
       return;
     }
 
-    // 如果正在分析中，直接返回
-    if (isAnalyzing(currentTest)) {
+    // 如果正在分析中（后端态或本地态），直接返回
+    if (isAnalyzing(currentTest) || analyzingIds.has(id)) {
       message.warning('分析正在进行中，请稍候...');
       return;
     }
@@ -802,8 +1060,53 @@ const PerformanceTests: React.FC = () => {
       // 关闭加载消息
       message.destroy(`analyzing-${id}`);
       
+      // 提取错误信息
+      let errorMessage = '启动分析失败';
+      
+      // 尝试从不同位置提取错误信息
+      if (e.response?.data) {
+        const data = e.response.data;
+        // 处理不同的错误响应格式
+        if (typeof data === 'string') {
+          errorMessage += ': ' + data;
+        } else if (data.detail) {
+          // FastAPI 标准错误格式
+          errorMessage += ': ' + (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+        } else if (data.message) {
+          errorMessage += ': ' + (typeof data.message === 'string' ? data.message : JSON.stringify(data.message));
+        } else if (data.error) {
+          errorMessage += ': ' + (typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+        } else {
+          // 如果 data 本身是对象，尝试序列化
+          try {
+            errorMessage += ': ' + JSON.stringify(data);
+          } catch {
+            errorMessage += ': ' + String(data);
+          }
+        }
+      } else if (e.message) {
+        errorMessage += ': ' + e.message;
+      } else if (e.toString && e.toString() !== '[object Object]') {
+        errorMessage += ': ' + e.toString();
+      } else {
+        // 最后尝试序列化整个错误对象
+        try {
+          errorMessage += ': ' + JSON.stringify(e);
+        } catch {
+          errorMessage += ': 未知错误';
+        }
+      }
+      
+      console.error('[性能测试] 分析失败:', {
+        error: e,
+        response: e.response,
+        data: e.response?.data,
+        message: e.message,
+        errorMessage
+      });
+      
       // 检查是否是超时错误
-      if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+      if (e.code === 'ECONNABORTED' || e.message?.includes('timeout') || errorMessage.includes('timeout')) {
         // 超时错误：分析可能仍在进行，启动轮询等待结果
         message.warning({ 
           content: '分析请求超时，但分析可能仍在后台进行中，正在检查结果...', 
@@ -815,9 +1118,9 @@ const PerformanceTests: React.FC = () => {
       } else {
         // 其他错误：显示错误消息
         message.error({ 
-          content: '启动分析失败: ' + (e.response?.data?.detail || e.message), 
+          content: errorMessage, 
           key: `analyzing-${id}`,
-          duration: 5
+          duration: 8
         });
       }
     }
@@ -857,6 +1160,7 @@ const PerformanceTests: React.FC = () => {
       pending: { color: 'default', text: '待执行' },
       running: { color: 'processing', text: '执行中' },
       completed: { color: 'success', text: '已完成' },
+      success: { color: 'success', text: '已完成' }, // 兼容后端可能返回的success状态
       failed: { color: 'error', text: '失败' },
       cancelled: { color: 'warning', text: '已取消' },
     };
@@ -974,7 +1278,7 @@ const PerformanceTests: React.FC = () => {
               重新执行
             </Button>
           )}
-          {record.status === 'completed' && (
+          {(record.status === 'completed' || record.status === 'success') && (
             <>
               <Button
                 type="link"
@@ -989,18 +1293,8 @@ const PerformanceTests: React.FC = () => {
                 size="small"
                 icon={<BarChartOutlined />}
                 onClick={() => handleAnalyze(record.id)}
-                disabled={(() => {
-                  // 如果正在分析（有analysis但没有markdown，且在最近5分钟内），禁用按钮
-                  if (record.analysis && !record.analysis.markdown && record.analysis_generated_at) {
-                    const generatedAt = new Date(record.analysis_generated_at).getTime();
-                    const now = Date.now();
-                    const fiveMinutesAgo = now - 5 * 60 * 1000;
-                    if (generatedAt > fiveMinutesAgo) {
-                      return true;
-                    }
-                  }
-                  return false;
-                })()}
+                disabled={analyzingIds.has(record.id) || (record.analysis && !record.analysis.markdown && record.analysis_generated_at && (new Date(record.analysis_generated_at).getTime() > Date.now() - 5 * 60 * 1000))}
+                loading={analyzingIds.has(record.id)}
               >
                 分析
               </Button>
@@ -1075,10 +1369,21 @@ const PerformanceTests: React.FC = () => {
         open={modalOpen}
         onOk={handleCreate}
         onCancel={() => {
+          // 如果正在生成脚本，取消请求
+          if (generatingScript && createAbortControllerRef.current) {
+            createAbortControllerRef.current.abort();
+            createAbortControllerRef.current = null;
+            message.info('已取消脚本生成');
+          }
           setModalOpen(false);
+          setGeneratingScript(false);
           form.resetFields();
           setAutoExecute(false); // 重置为默认值（关闭）
+          setGenerationMode('regex'); // 重置为默认值（正则模式）
         }}
+        maskClosable={!generatingScript}  // 请求进行中时禁用遮罩层点击关闭
+        keyboard={!generatingScript}      // 请求进行中时禁用ESC键关闭
+        closable={!generatingScript}      // 请求进行中时禁用右上角X按钮
         width={800}
         confirmLoading={generatingScript}
         okText="创建"
@@ -1103,6 +1408,19 @@ const PerformanceTests: React.FC = () => {
             extra="开启后，创建测试将自动开始执行"
           >
             {/* 这个表单项仅用于显示开关，不需要实际的值 */}
+          </Form.Item>
+          <Form.Item
+            label="脚本生成模式"
+            extra="AI模式：直接让AI根据需求生成增强版脚本（包含更多监控指标） | 正则模式：使用正则匹配提取参数后生成标准脚本"
+          >
+            <Radio.Group 
+              value={generationMode} 
+              onChange={(e) => setGenerationMode(e.target.value)}
+              disabled={generatingScript}
+            >
+              <Radio value="regex">正则匹配模式（默认）</Radio>
+              <Radio value="ai">AI直接生成模式</Radio>
+            </Radio.Group>
           </Form.Item>
           <Form.Item
             name="project_id"
@@ -1184,7 +1502,10 @@ const PerformanceTests: React.FC = () => {
                 )}
               </Descriptions>
 
-              {testDetail.results && testDetail.results.metrics && (
+              {testDetail.results && 
+               typeof testDetail.results === 'object' && 
+               testDetail.results.metrics && 
+               typeof testDetail.results.metrics === 'object' && (
                 <>
                   <Divider>性能指标</Divider>
                   <Row gutter={16}>
@@ -1480,52 +1801,71 @@ const PerformanceTests: React.FC = () => {
             </Tabs.TabPane>
 
             <Tabs.TabPane tab="测试结果" key="results">
-              {testDetail.results ? (
+              {testDetail.results && typeof testDetail.results === 'object' ? (
                 <div>
                   {/* 显示错误信息（如果有） */}
-                  {testDetail.results.execution_result?.error && (
+                  {testDetail.results.error && typeof testDetail.results.error === 'string' && (
                     <Alert
                       message="执行错误"
-                      description={testDetail.results.execution_result.error}
+                      description={testDetail.results.error}
                       type="error"
                       style={{ marginBottom: 16 }}
                     />
                   )}
-                  {testDetail.results.execution_result?.stderr && (
-                    <Alert
-                      message="错误输出 (stderr)"
-                      description={
-                        <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                          {testDetail.results.execution_result.stderr}
-                        </pre>
-                      }
-                      type="error"
-                      style={{ marginBottom: 16 }}
-                    />
-                  )}
-                  {testDetail.results.execution_result?.exit_code !== 0 && (
-                    <Alert
-                      message={`执行退出码: ${testDetail.results.execution_result.exit_code}`}
-                      description={
-                        testDetail.results.execution_result.exit_code === 99
-                          ? "阈值检查失败（测试执行成功，但未达到性能阈值）"
-                          : testDetail.results.execution_result.exit_code === 1
-                          ? "脚本执行错误或测试失败"
-                          : "未知错误"
-                      }
-                      type="warning"
-                      style={{ marginBottom: 16 }}
-                    />
-                  )}
-                  {/* 显示标准输出（如果有） */}
-                  {testDetail.results.execution_result?.stdout && (
-                    <div style={{ marginBottom: 16 }}>
-                      <Title level={5}>执行输出 (stdout)</Title>
-                      <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 4, overflow: 'auto', maxHeight: 300, fontSize: 12 }}>
-                        {testDetail.results.execution_result.stdout}
-                      </pre>
-                    </div>
-                  )}
+                  {(() => {
+                    const execResult = testDetail.results.execution_result;
+                    if (execResult && typeof execResult === 'object') {
+                      return (
+                        <>
+                          {execResult.error && (
+                            <Alert
+                              message="执行错误"
+                              description={String(execResult.error)}
+                              type="error"
+                              style={{ marginBottom: 16 }}
+                            />
+                          )}
+                          {execResult.stderr && (
+                            <Alert
+                              message="错误输出 (stderr)"
+                              description={
+                                <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                                  {String(execResult.stderr)}
+                                </pre>
+                              }
+                              type="error"
+                              style={{ marginBottom: 16 }}
+                            />
+                          )}
+                          {execResult.exit_code !== undefined && 
+                           execResult.exit_code !== null &&
+                           execResult.exit_code !== 0 && (
+                            <Alert
+                              message={`执行退出码: ${execResult.exit_code}`}
+                              description={
+                                execResult.exit_code === 99
+                                  ? "阈值检查失败（测试执行成功，但未达到性能阈值）"
+                                  : execResult.exit_code === 1
+                                  ? "脚本执行错误或测试失败"
+                                  : "未知错误"
+                              }
+                              type="warning"
+                              style={{ marginBottom: 16 }}
+                            />
+                          )}
+                          {execResult.stdout && (
+                            <div style={{ marginBottom: 16 }}>
+                              <Title level={5}>执行输出 (stdout)</Title>
+                              <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 4, overflow: 'auto', maxHeight: 300, fontSize: 12 }}>
+                                {String(execResult.stdout)}
+                              </pre>
+                            </div>
+                          )}
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
                   {/* 显示完整结果JSON */}
                   <Title level={5}>完整结果数据</Title>
                   <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 4, overflow: 'auto', maxHeight: 600 }}>
@@ -2115,14 +2455,14 @@ const PerformanceTests: React.FC = () => {
                       type="primary"
                       icon={<BarChartOutlined />}
                       onClick={() => handleAnalyze(testDetail.id)}
-                      disabled={isAnalyzing(testDetail)}
+                      disabled={analyzingIds.has(testDetail.id) || isAnalyzing(testDetail)}
                       style={{ marginTop: 16 }}
                     >
                       重新生成 AI 分析报告
                     </Button>
                   )}
                 </div>
-              ) : testDetail.status === 'completed' || testDetail.status === 'failed' ? (
+              ) : (testDetail.status === 'completed' || testDetail.status === 'success' || testDetail.status === 'failed') ? (
                 <div>
                   <Alert 
                     message="暂无分析结果" 
@@ -2134,7 +2474,7 @@ const PerformanceTests: React.FC = () => {
                     type="primary"
                     icon={<BarChartOutlined />}
                     onClick={() => handleAnalyze(testDetail.id)}
-                    disabled={isAnalyzing(testDetail)}
+                    disabled={analyzingIds.has(testDetail.id) || isAnalyzing(testDetail)}
                   >
                     生成 AI 分析报告
                   </Button>

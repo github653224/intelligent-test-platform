@@ -4,7 +4,16 @@ const API_BASE_URL = 'http://localhost:8000/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000, // 减少超时时间到10秒，避免长时间等待
+  timeout: 10000, // 默认超时时间10秒
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// 创建长时间请求的客户端（用于AI生成等耗时操作）
+const longTimeoutClient = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 180000, // 3分钟超时，用于AI生成等长时间操作
   headers: {
     'Content-Type': 'application/json',
   },
@@ -615,11 +624,16 @@ export interface K6ScriptGenerateRequest {
     duration?: string;
     stages?: any[];
   };
+  generation_mode?: string; // 'ai' 或 'regex'，默认 'regex'
 }
 
 // 生成 k6 脚本
-export const generateK6Script = async (data: K6ScriptGenerateRequest) => {
-  const response = await apiClient.post('/performance-tests/generate-script', data);
+export const generateK6Script = async (data: K6ScriptGenerateRequest, signal?: AbortSignal) => {
+  // AI生成模式可能需要更长时间，使用长时间客户端
+  const client = data.generation_mode === 'ai' ? longTimeoutClient : apiClient;
+  const response = await client.post('/performance-tests/generate-script', data, {
+    signal  // 传递 AbortSignal 以支持取消
+  });
   return response.data;
 };
 
@@ -631,37 +645,60 @@ export const createPerformanceTest = async (data: {
   test_description: string;
   target_url?: string;
   load_config?: any;
-}) => {
-  const response = await apiClient.post('/performance-tests', data);
+  generation_mode?: string; // 'ai' 或 'regex'，默认 'regex'
+  k6_script?: string; // 已生成的脚本（如果提供，后端将直接使用）
+}, signal?: AbortSignal) => {
+  // 创建测试通常很快，使用普通客户端即可（脚本已在前端生成）
+  const response = await apiClient.post('/performance-tests', data, {
+    signal  // 传递 AbortSignal 以支持取消
+  });
   return response.data;
 };
 
 // 获取性能测试列表
 export const listPerformanceTests = async (params?: { project_id?: number }) => {
-  // 列表查询使用更短的超时时间，确保快速响应
+  // 列表查询使用合理的超时时间（30秒），避免后端响应慢时超时
   const response = await apiClient.get('/performance-tests', { 
     params,
-    timeout: 5000  // 5秒超时
+    timeout: 30000  // 30秒超时
   });
   return response.data;
 };
 
 // 获取性能测试详情
 export const getPerformanceTest = async (id: number) => {
-  // 详情查询使用更短的超时时间，避免阻塞
+  // 详情查询使用合理的超时时间
   const response = await apiClient.get(`/performance-tests/${id}`, {
-    timeout: 5000  // 5秒超时
+    timeout: 30000  // 30秒超时
   });
   return response.data;
 };
 
 // 执行性能测试
 export const executePerformanceTest = async (id: number) => {
-  // 执行API应该立即返回，使用短超时
-  const response = await apiClient.post(`/performance-tests/${id}/execute`, {}, {
-    timeout: 5000  // 5秒超时
-  });
-  return response.data;
+  console.log(`[前端] 准备执行性能测试: ID=${id}`);
+  console.log(`[前端] 请求URL: /performance-tests/${id}/execute`);
+  console.log(`[前端] 请求体: {}`);
+  
+  try {
+    // 执行API应该立即返回，但给足够的时间
+    const response = await apiClient.post(`/performance-tests/${id}/execute`, {}, {
+      timeout: 30000  // 30秒超时
+    });
+    console.log(`[前端] 执行请求成功: ID=${id}`);
+    console.log(`[前端] 响应状态: ${response.status}`);
+    console.log(`[前端] 响应数据:`, response.data);
+    return response.data;
+  } catch (error: any) {
+    console.error(`[前端] 执行请求失败: ID=${id}`, error);
+    console.error(`[前端] 错误详情:`, {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+    });
+    throw error;
+  }
 };
 
 // 分析性能测试结果

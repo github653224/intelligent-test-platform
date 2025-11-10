@@ -18,6 +18,8 @@ class PerformanceTestCreate(PerformanceTestBase):
     test_description: str = Field(..., description="测试描述（一句话描述性能测试需求）")
     target_url: Optional[str] = Field(None, description="目标URL")
     load_config: Optional[Dict[str, Any]] = Field(None, description="负载配置（VUs、duration等）")
+    generation_mode: str = Field("regex", description="生成模式：'ai' 或 'regex'，ai=AI直接生成，regex=正则匹配生成")
+    k6_script: Optional[str] = Field(None, description="已生成的k6脚本（如果提供，则直接使用，不再生成）")
 
 
 class PerformanceTestUpdate(BaseModel):
@@ -59,6 +61,7 @@ class K6ScriptGenerateRequest(BaseModel):
     test_description: str = Field(..., description="测试描述（一句话描述性能测试需求）")
     target_url: Optional[str] = Field(None, description="目标URL")
     load_config: Optional[Dict[str, Any]] = Field(None, description="负载配置")
+    generation_mode: str = Field("regex", description="生成模式：'ai' 或 'regex'，ai=AI直接生成，regex=正则匹配生成")
 
 
 class K6ScriptGenerateResponse(BaseModel):
@@ -71,11 +74,11 @@ class K6ScriptGenerateResponse(BaseModel):
 
 class PerformanceTestExecuteRequest(BaseModel):
     """性能测试执行请求"""
-    performance_test_id: int
+    performance_test_id: Optional[int] = Field(None, description="性能测试ID（路径参数中已包含，此处可选）")
     additional_args: Optional[List[str]] = Field(None, description="额外的k6命令行参数")
 
 
 class PerformanceTestAnalysisRequest(BaseModel):
     """性能测试分析请求"""
-    performance_test_id: int
+    prompt: Optional[str] = None  # 可选的自定义分析提示词
 
